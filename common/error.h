@@ -17,7 +17,9 @@ namespace Carbon {
 // Success values should be represented as the presence of a value in ErrorOr,
 // using `ErrorOr<Success>` and `return Success();` if no value needs to be
 // returned.
-struct Success {};
+struct Success : public Printable<Success> {
+  void Print(llvm::raw_ostream& out) const { out << "Success"; }
+};
 
 // Tracks an error message.
 //
@@ -27,7 +29,7 @@ class [[nodiscard]] Error : public Printable<Error> {
   // Represents an error state.
   explicit Error(llvm::Twine location, llvm::Twine message)
       : location_(location.str()), message_(message.str()) {
-    CARBON_CHECK(!message_.empty()) << "Errors must have a message.";
+    CARBON_CHECK(!message_.empty(), "Errors must have a message.");
   }
 
   // Represents an error with no associated location.
@@ -141,14 +143,14 @@ class ErrorBuilder {
   // Accumulates string message to a temporary `ErrorBuilder`. After streaming,
   // the builder must be converted to an `Error` or `ErrorOr`.
   template <typename T>
-  auto operator<<(const T& message) && -> ErrorBuilder&& {
+  auto operator<<(T&& message) && -> ErrorBuilder&& {
     *out_ << message;
     return std::move(*this);
   }
 
   // Accumulates string message for an lvalue error builder.
   template <typename T>
-  auto operator<<(const T& message) & -> ErrorBuilder& {
+  auto operator<<(T&& message) & -> ErrorBuilder& {
     *out_ << message;
     return *this;
   }
@@ -179,10 +181,9 @@ class ErrorBuilder {
 // argument separator.
 #define CARBON_PROTECT_COMMAS(...) __VA_ARGS__
 
-#define CARBON_RETURN_IF_ERROR_IMPL(unique_name, expr)                    \
-  if (auto unique_name = (expr); /* NOLINT(bugprone-macro-parentheses) */ \
-      !(unique_name).ok()) {                                              \
-    return std::move(unique_name).error();                                \
+#define CARBON_RETURN_IF_ERROR_IMPL(unique_name, expr)  \
+  if (auto unique_name = (expr); !(unique_name).ok()) { \
+    return std::move(unique_name).error();              \
   }
 
 #define CARBON_RETURN_IF_ERROR(expr)                                    \
@@ -190,12 +191,12 @@ class ErrorBuilder {
       CARBON_MAKE_UNIQUE_NAME(_llvm_error_line, __LINE__, __COUNTER__), \
       CARBON_PROTECT_COMMAS(expr))
 
-#define CARBON_ASSIGN_OR_RETURN_IMPL(unique_name, var, expr)          \
-  auto unique_name = (expr); /* NOLINT(bugprone-macro-parentheses) */ \
-  if (!(unique_name).ok()) {                                          \
-    return std::move(unique_name).error();                            \
-  }                                                                   \
-  var = std::move(*(unique_name)); /* NOLINT(bugprone-macro-parentheses) */
+#define CARBON_ASSIGN_OR_RETURN_IMPL(unique_name, var, expr) \
+  auto unique_name = (expr);                                 \
+  if (!(unique_name).ok()) {                                 \
+    return std::move(unique_name).error();                   \
+  }                                                          \
+  var = std::move(*(unique_name));
 
 #define CARBON_ASSIGN_OR_RETURN(var, expr)                                 \
   CARBON_ASSIGN_OR_RETURN_IMPL(                                            \

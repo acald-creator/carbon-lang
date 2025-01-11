@@ -20,7 +20,7 @@ auto CodeGen::Make(llvm::Module& module, llvm::StringRef target_triple,
       llvm::TargetRegistry::lookupTarget(target_triple, error);
 
   if (!target) {
-    errors << "ERROR: Invalid target: " << error << "\n";
+    errors << "error: invalid target: " << error << "\n";
     return {};
   }
   module.setTargetTriple(target_triple);
@@ -29,10 +29,9 @@ auto CodeGen::Make(llvm::Module& module, llvm::StringRef target_triple,
   constexpr llvm::StringLiteral Features = "";
 
   llvm::TargetOptions target_opts;
-  std::optional<llvm::Reloc::Model> reloc_model;
   CodeGen codegen(module, errors);
   codegen.target_machine_.reset(target->createTargetMachine(
-      target_triple, CPU, Features, target_opts, reloc_model));
+      target_triple, CPU, Features, target_opts, llvm::Reloc::PIC_));
   return codegen;
 }
 
@@ -50,11 +49,11 @@ auto CodeGen::EmitCode(llvm::raw_pwrite_stream& out,
 
   // Using the legacy PM to generate the assembly since the new PM
   // does not work with this yet.
-  // TODO: make the new PM work with the codegen pipeline.
+  // TODO: Make the new PM work with the codegen pipeline.
   llvm::legacy::PassManager pass;
   // Note that this returns true on an error.
   if (target_machine_->addPassesToEmitFile(pass, out, nullptr, file_type)) {
-    errors_ << "ERROR: Unable to emit to this file.\n";
+    errors_ << "error: unable to emit to this file\n";
     return false;
   }
 

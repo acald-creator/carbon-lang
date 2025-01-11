@@ -6,7 +6,6 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 package(default_visibility = [
     "//explorer:__pkg__",
-    "//explorer/fuzzing:__pkg__",
 ])
 
 cc_library(
@@ -38,6 +37,6 @@ cc_test(
     deps = [
         ":parse_and_execute",
         "//testing/base:gtest_main",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
     ],
 )

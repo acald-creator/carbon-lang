@@ -2,7 +2,9 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "toolchain/diagnostics/format_providers.h"
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 
@@ -24,21 +26,21 @@ auto HandleBindingPattern(Context& context) -> void {
   }
 
   // Handle an invalid pattern introducer for parameters and variables.
-  auto on_error = [&]() {
-    CARBON_DIAGNOSTIC(ExpectedBindingPattern, Error,
-                      "Expected binding pattern.");
-    context.emitter().Emit(*context.position(), ExpectedBindingPattern);
-    // Add a placeholder for the type.
-    context.AddLeafNode(NodeKind::InvalidParse, *context.position(),
-                        /*has_error=*/true);
-    state.has_error = true;
-    context.PushState(state, State::BindingPatternFinishAsRegular);
+  auto on_error = [&](bool expected_name) {
+    if (!state.has_error) {
+      CARBON_DIAGNOSTIC(ExpectedBindingPattern, Error,
+                        "expected {0:name|`:` or `:!`} in binding pattern",
+                        BoolAsSelect);
+      context.emitter().Emit(*context.position(), ExpectedBindingPattern,
+                             expected_name);
+      state.has_error = true;
+    }
   };
 
   // The first item should be an identifier or `self`.
   bool has_name = false;
   if (auto identifier = context.ConsumeIf(Lex::TokenKind::Identifier)) {
-    context.AddLeafNode(NodeKind::IdentifierName, *identifier);
+    context.AddLeafNode(NodeKind::IdentifierNameNotBeforeParams, *identifier);
     has_name = true;
   } else if (auto self =
                  context.ConsumeIf(Lex::TokenKind::SelfValueIdentifier)) {
@@ -49,10 +51,9 @@ auto HandleBindingPattern(Context& context) -> void {
   }
   if (!has_name) {
     // Add a placeholder for the name.
-    context.AddLeafNode(NodeKind::IdentifierName, *context.position(),
-                        /*has_error=*/true);
-    on_error();
-    return;
+    context.AddLeafNode(NodeKind::IdentifierNameNotBeforeParams,
+                        *context.position(), /*has_error=*/true);
+    on_error(/*expected_name=*/true);
   }
 
   if (auto kind = context.PositionKind();
@@ -65,8 +66,10 @@ auto HandleBindingPattern(Context& context) -> void {
     context.PushState(state);
     context.PushStateForExpr(PrecedenceGroup::ForType());
   } else {
-    on_error();
-    return;
+    on_error(/*expected_name=*/false);
+    // Add a substitute for a type node.
+    context.AddInvalidParse(*context.position());
+    context.PushState(state, State::BindingPatternFinishAsRegular);
   }
 }
 
@@ -75,7 +78,7 @@ static auto HandleBindingPatternFinish(Context& context, NodeKind node_kind)
     -> void {
   auto state = context.PopState();
 
-  context.AddNode(node_kind, state.token, state.subtree_start, state.has_error);
+  context.AddNode(node_kind, state.token, state.has_error);
 
   // Propagate errors to the parent state so that they can take different
   // actions on invalid patterns.
@@ -95,8 +98,7 @@ auto HandleBindingPatternFinishAsRegular(Context& context) -> void {
 auto HandleBindingPatternAddr(Context& context) -> void {
   auto state = context.PopState();
 
-  context.AddNode(NodeKind::Addr, state.token, state.subtree_start,
-                  state.has_error);
+  context.AddNode(NodeKind::Addr, state.token, state.has_error);
 
   // If an error was encountered, propagate it while adding a node.
   if (state.has_error) {
@@ -107,8 +109,7 @@ auto HandleBindingPatternAddr(Context& context) -> void {
 auto HandleBindingPatternTemplate(Context& context) -> void {
   auto state = context.PopState();
 
-  context.AddNode(NodeKind::Template, state.token, state.subtree_start,
-                  state.has_error);
+  context.AddNode(NodeKind::Template, state.token, state.has_error);
 
   // If an error was encountered, propagate it while adding a node.
   if (state.has_error) {

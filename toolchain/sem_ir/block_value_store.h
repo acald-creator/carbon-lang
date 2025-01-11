@@ -7,7 +7,7 @@
 
 #include <type_traits>
 
-#include "llvm/ADT/DenseMap.h"
+#include "common/set.h"
 #include "toolchain/base/value_store.h"
 #include "toolchain/base/yaml.h"
 
@@ -30,10 +30,18 @@ class BlockValueStore : public Yaml::Printable<BlockValueStore<IdT>> {
   using ElementType = IdT::ElementType;
 
   explicit BlockValueStore(llvm::BumpPtrAllocator& allocator)
-      : allocator_(&allocator) {}
+      : allocator_(&allocator) {
+    auto empty = llvm::MutableArrayRef<ElementType>();
+    auto empty_val = canonical_blocks_.Insert(
+        empty, [&] { return values_.Add(empty); }, KeyContext(this));
+    CARBON_CHECK(empty_val.key() == IdT::Empty);
+  }
 
   // Adds a block with the given content, returning an ID to reference it.
   auto Add(llvm::ArrayRef<ElementType> content) -> IdT {
+    if (content.empty()) {
+      return IdT::Empty;
+    }
     return values_.Add(AllocateCopy(content));
   }
 
@@ -42,9 +50,33 @@ class BlockValueStore : public Yaml::Printable<BlockValueStore<IdT>> {
     return values_.Get(id);
   }
 
-  // Returns the requested block.
-  auto Get(IdT id) -> llvm::MutableArrayRef<ElementType> {
+  // Returns a mutable view of the requested block. This operation should be
+  // avoided where possible; we generally want blocks to be immutable once
+  // created.
+  auto GetMutable(IdT id) -> llvm::MutableArrayRef<ElementType> {
     return values_.Get(id);
+  }
+
+  // Adds a block or finds an existing canonical block with the given content,
+  // and returns an ID to reference it.
+  auto AddCanonical(llvm::ArrayRef<ElementType> content) -> IdT {
+    if (content.empty()) {
+      return IdT::Empty;
+    }
+    auto result = canonical_blocks_.Insert(
+        content, [&] { return Add(content); }, KeyContext(this));
+    return result.key();
+  }
+
+  // Promotes an existing block ID to a canonical block ID, or returns an
+  // existing canonical block ID if the block was already added. The specified
+  // block must not be modified after this point.
+  auto MakeCanonical(IdT id) -> IdT {
+    // Get the content first so that we don't have unnecessary translation of
+    // the `id` into the content during insertion.
+    auto result = canonical_blocks_.Insert(
+        Get(id), [id] { return id; }, KeyContext(this));
+    return result.key();
   }
 
   auto OutputYaml() const -> Yaml::OutputMapping {
@@ -62,6 +94,14 @@ class BlockValueStore : public Yaml::Printable<BlockValueStore<IdT>> {
     });
   }
 
+  // Collects memory usage of members.
+  auto CollectMemUsage(MemUsage& mem_usage, llvm::StringRef label) const
+      -> void {
+    mem_usage.Collect(MemUsage::ConcatLabel(label, "values_"), values_);
+    mem_usage.Collect(MemUsage::ConcatLabel(label, "canonical_blocks_"),
+                      canonical_blocks_, KeyContext(this));
+  }
+
   auto size() const -> int { return values_.size(); }
 
  protected:
@@ -75,15 +115,17 @@ class BlockValueStore : public Yaml::Printable<BlockValueStore<IdT>> {
   }
 
   // Sets the contents of an empty block to the given content.
-  auto Set(IdT block_id, llvm::ArrayRef<ElementType> content) -> void {
-    CARBON_CHECK(Get(block_id).empty())
-        << "inst block content set more than once";
+  auto SetContent(IdT block_id, llvm::ArrayRef<ElementType> content) -> void {
+    CARBON_CHECK(Get(block_id).empty(),
+                 "inst block content set more than once");
     values_.Get(block_id) = AllocateCopy(content);
   }
 
  private:
+  class KeyContext;
+
   // Allocates an uninitialized array using our slab allocator.
-  auto AllocateUninitialized(std::size_t size)
+  auto AllocateUninitialized(size_t size)
       -> llvm::MutableArrayRef<ElementType> {
     // We're not going to run a destructor, so ensure that's OK.
     static_assert(std::is_trivially_destructible_v<ElementType>);
@@ -103,6 +145,21 @@ class BlockValueStore : public Yaml::Printable<BlockValueStore<IdT>> {
 
   llvm::BumpPtrAllocator* allocator_;
   ValueStore<IdT> values_;
+  Set<IdT, /*SmallSize=*/0, KeyContext> canonical_blocks_;
+};
+
+template <typename IdT>
+class BlockValueStore<IdT>::KeyContext
+    : public TranslatingKeyContext<KeyContext> {
+ public:
+  explicit KeyContext(const BlockValueStore* store) : store_(store) {}
+
+  auto TranslateKey(IdT id) const -> llvm::ArrayRef<ElementType> {
+    return store_->Get(id);
+  }
+
+ private:
+  const BlockValueStore* store_;
 };
 
 }  // namespace Carbon::SemIR

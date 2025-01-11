@@ -5,6 +5,7 @@
 #include "toolchain/lex/token_kind.h"
 #include "toolchain/lex/tokenized_buffer.h"
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 #include "toolchain/parse/node_kind.h"
 #include "toolchain/parse/state.h"
 
@@ -23,14 +24,12 @@ auto HandleArrayExprSemi(Context& context) -> void {
   auto state = context.PopState();
   auto semi = context.ConsumeIf(Lex::TokenKind::Semi);
   if (!semi) {
-    context.AddNode(NodeKind::ArrayExprSemi, *context.position(),
-                    state.subtree_start, true);
-    CARBON_DIAGNOSTIC(ExpectedArraySemi, Error, "Expected `;` in array type.");
+    context.AddNode(NodeKind::ArrayExprSemi, *context.position(), true);
+    CARBON_DIAGNOSTIC(ExpectedArraySemi, Error, "expected `;` in array type");
     context.emitter().Emit(*context.position(), ExpectedArraySemi);
     state.has_error = true;
   } else {
-    context.AddNode(NodeKind::ArrayExprSemi, *semi, state.subtree_start,
-                    state.has_error);
+    context.AddNode(NodeKind::ArrayExprSemi, *semi, state.has_error);
   }
   context.PushState(state, State::ArrayExprFinish);
   if (!context.PositionIs(Lex::TokenKind::CloseSquareBracket)) {

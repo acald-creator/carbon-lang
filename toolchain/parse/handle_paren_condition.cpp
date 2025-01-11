@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 
@@ -22,8 +23,7 @@ static auto HandleParenCondition(Context& context, NodeKind start_kind,
     // For an open curly, assume the condition was completely omitted.
     // Expression parsing would treat the { as a struct, but instead assume it's
     // a code block and just emit an invalid parse.
-    context.AddLeafNode(NodeKind::InvalidParse, *context.position(),
-                        /*has_error=*/true);
+    context.AddInvalidParse(*context.position());
   } else {
     context.PushState(State::Expr);
   }

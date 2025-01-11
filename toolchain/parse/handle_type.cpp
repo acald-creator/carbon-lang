@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 
@@ -11,7 +12,7 @@ static auto HandleTypeAfterIntroducer(Context& context,
                                       State after_params_state) -> void {
   auto state = context.PopState();
   context.PushState(state, after_params_state);
-  context.PushState(State::DeclNameAndParamsAsOptional, state.token);
+  context.PushState(State::DeclNameAndParams, state.token);
 }
 
 auto HandleTypeAfterIntroducerAsClass(Context& context) -> void {

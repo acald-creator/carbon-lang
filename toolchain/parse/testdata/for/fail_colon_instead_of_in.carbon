@@ -3,9 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/for/fail_colon_instead_of_in.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/for/fail_colon_instead_of_in.carbon
 
 fn foo() {
-  // CHECK:STDERR: fail_colon_instead_of_in.carbon:[[@LINE+3]]:19: ERROR: `:` should be replaced by `in`.
+  // CHECK:STDERR: fail_colon_instead_of_in.carbon:[[@LINE+3]]:19: error: `:` should be replaced by `in` [ExpectedInNotColon]
   // CHECK:STDERR:   for (var x: i32 : y) {
   // CHECK:STDERR:                   ^
   for (var x: i32 : y) {
@@ -17,13 +21,13 @@ fn foo() {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'foo'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'foo'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:       {kind: 'FunctionDefinitionStart', text: '{', subtree_size: 5},
 // CHECK:STDOUT:           {kind: 'ForHeaderStart', text: '('},
 // CHECK:STDOUT:             {kind: 'VariableIntroducer', text: 'var'},
-// CHECK:STDOUT:               {kind: 'IdentifierName', text: 'x'},
+// CHECK:STDOUT:               {kind: 'IdentifierNameNotBeforeParams', text: 'x'},
 // CHECK:STDOUT:               {kind: 'IntTypeLiteral', text: 'i32'},
 // CHECK:STDOUT:             {kind: 'BindingPattern', text: ':', subtree_size: 3},
 // CHECK:STDOUT:           {kind: 'ForIn', text: ':', has_error: yes, subtree_size: 5},

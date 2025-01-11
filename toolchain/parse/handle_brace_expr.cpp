@@ -2,7 +2,9 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "toolchain/diagnostics/format_providers.h"
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 
@@ -10,9 +12,8 @@ auto HandleBraceExpr(Context& context) -> void {
   auto state = context.PopState();
   context.PushState(state, State::BraceExprFinishAsUnknown);
 
-  CARBON_CHECK(context.ConsumeAndAddLeafNodeIf(
-      Lex::TokenKind::OpenCurlyBrace,
-      NodeKind::StructLiteralOrStructTypeLiteralStart));
+  CARBON_CHECK(context.ConsumeAndAddLeafNodeIf(Lex::TokenKind::OpenCurlyBrace,
+                                               NodeKind::Placeholder));
   if (!context.PositionIs(Lex::TokenKind::CloseCurlyBrace)) {
     context.PushState(State::BraceExprParamAsUnknown);
   }
@@ -22,20 +23,26 @@ auto HandleBraceExpr(Context& context) -> void {
 static auto HandleBraceExprParamError(Context& context,
                                       Context::StateStackEntry state,
                                       State param_finish_state) -> void {
-  bool is_type = param_finish_state == State::BraceExprParamFinishAsType;
-  bool is_value = param_finish_state == State::BraceExprParamFinishAsValue;
-  bool is_unknown = param_finish_state == State::BraceExprParamFinishAsUnknown;
-  CARBON_CHECK(is_type || is_value || is_unknown);
-  CARBON_DIAGNOSTIC(ExpectedStructLiteralField, Error, "Expected {0}{1}{2}.",
-                    llvm::StringLiteral, llvm::StringLiteral,
-                    llvm::StringLiteral);
-  context.emitter().Emit(
-      *context.position(), ExpectedStructLiteralField,
-      (is_type || is_unknown) ? llvm::StringLiteral("`.field: field_type`")
-                              : llvm::StringLiteral(""),
-      is_unknown ? llvm::StringLiteral(" or ") : llvm::StringLiteral(""),
-      (is_value || is_unknown) ? llvm::StringLiteral("`.field = value`")
-                               : llvm::StringLiteral(""));
+  IntAsSelect mode(0);
+  switch (param_finish_state) {
+    case State::BraceExprParamFinishAsType:
+      mode.value = 0;
+      break;
+    case State::BraceExprParamFinishAsValue:
+      mode.value = 1;
+      break;
+    case State::BraceExprParamFinishAsUnknown:
+      mode.value = 2;
+      break;
+    default:
+      CARBON_FATAL("Unexpected state: {0}", param_finish_state);
+  }
+  CARBON_DIAGNOSTIC(
+      ExpectedStructLiteralField, Error,
+      "expected {0:=0:`.field: field_type`|"
+      "=1:`.field = value`|=2:`.field: field_type` or `.field = value`}",
+      IntAsSelect);
+  context.emitter().Emit(*context.position(), ExpectedStructLiteralField, mode);
 
   state.has_error = true;
   context.PushState(state, param_finish_state);
@@ -142,8 +149,9 @@ auto HandleBraceExprParamAfterDesignatorAsUnknown(Context& context) -> void {
 }
 
 // Handles BraceExprParamFinishAs(Type|Value|Unknown).
-static auto HandleBraceExprParamFinish(Context& context, NodeKind node_kind,
-                                       State param_state) -> void {
+static auto HandleBraceExprParamFinish(Context& context, NodeKind field_kind,
+                                       NodeKind comma_kind, State param_state)
+    -> void {
   auto state = context.PopState();
 
   if (state.has_error) {
@@ -151,51 +159,55 @@ static auto HandleBraceExprParamFinish(Context& context, NodeKind node_kind,
                         /*has_error=*/true);
     context.ReturnErrorOnState();
   } else {
-    context.AddNode(node_kind, state.token, state.subtree_start,
-                    /*has_error=*/false);
+    context.AddNode(field_kind, state.token, /*has_error=*/false);
   }
 
-  if (context.ConsumeListToken(
-          NodeKind::StructComma, Lex::TokenKind::CloseCurlyBrace,
-          state.has_error) == Context::ListTokenKind::Comma) {
+  if (context.ConsumeListToken(comma_kind, Lex::TokenKind::CloseCurlyBrace,
+                               state.has_error) ==
+      Context::ListTokenKind::Comma) {
     context.PushState(param_state);
   }
 }
 
 auto HandleBraceExprParamFinishAsType(Context& context) -> void {
-  HandleBraceExprParamFinish(context, NodeKind::StructFieldType,
+  HandleBraceExprParamFinish(context, NodeKind::StructTypeLiteralField,
+                             NodeKind::StructTypeLiteralComma,
                              State::BraceExprParamAsType);
 }
 
 auto HandleBraceExprParamFinishAsValue(Context& context) -> void {
-  HandleBraceExprParamFinish(context, NodeKind::StructFieldValue,
+  HandleBraceExprParamFinish(context, NodeKind::StructLiteralField,
+                             NodeKind::StructLiteralComma,
                              State::BraceExprParamAsValue);
 }
 
 auto HandleBraceExprParamFinishAsUnknown(Context& context) -> void {
   HandleBraceExprParamFinish(context, NodeKind::InvalidParse,
+                             NodeKind::InvalidParse,
                              State::BraceExprParamAsUnknown);
 }
 
 // Handles BraceExprFinishAs(Type|Value|Unknown).
-static auto HandleBraceExprFinish(Context& context, NodeKind node_kind)
-    -> void {
+static auto HandleBraceExprFinish(Context& context, NodeKind start_kind,
+                                  NodeKind end_kind) -> void {
   auto state = context.PopState();
 
-  context.AddNode(node_kind, context.Consume(), state.subtree_start,
-                  state.has_error);
+  context.ReplacePlaceholderNode(state.subtree_start, start_kind, state.token);
+  context.AddNode(end_kind, context.Consume(), state.has_error);
 }
 
 auto HandleBraceExprFinishAsType(Context& context) -> void {
-  HandleBraceExprFinish(context, NodeKind::StructTypeLiteral);
+  HandleBraceExprFinish(context, NodeKind::StructTypeLiteralStart,
+                        NodeKind::StructTypeLiteral);
 }
 
 auto HandleBraceExprFinishAsValue(Context& context) -> void {
-  HandleBraceExprFinish(context, NodeKind::StructLiteral);
+  HandleBraceExprFinish(context, NodeKind::StructLiteralStart,
+                        NodeKind::StructLiteral);
 }
 
 auto HandleBraceExprFinishAsUnknown(Context& context) -> void {
-  HandleBraceExprFinish(context, NodeKind::StructLiteral);
+  HandleBraceExprFinishAsValue(context);
 }
 
 }  // namespace Carbon::Parse

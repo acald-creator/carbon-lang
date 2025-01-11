@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/function/declaration/fail_repeated_fn_and_semi.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/function/declaration/fail_repeated_fn_and_semi.carbon
 
-// CHECK:STDERR: fail_repeated_fn_and_semi.carbon:[[@LINE+3]]:4: ERROR: `fn` introducer should be followed by a name.
+// CHECK:STDERR: fail_repeated_fn_and_semi.carbon:[[@LINE+3]]:4: error: `fn` introducer should be followed by a name [ExpectedDeclName]
 // CHECK:STDERR: fn fn;
 // CHECK:STDERR:    ^~
 fn fn;

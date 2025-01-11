@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/struct/fail_comma_repeat_in_value.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/struct/fail_comma_repeat_in_value.carbon
 
-// CHECK:STDERR: fail_comma_repeat_in_value.carbon:[[@LINE+3]]:16: ERROR: Expected `.field = value`.
+// CHECK:STDERR: fail_comma_repeat_in_value.carbon:[[@LINE+3]]:16: error: expected `.field = value` [ExpectedStructLiteralField]
 // CHECK:STDERR: var x: {.a = 0,,} = {};
 // CHECK:STDERR:                ^
 var x: {.a = 0,,} = {};
@@ -13,19 +17,19 @@ var x: {.a = 0,,} = {};
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:       {kind: 'VariableIntroducer', text: 'var'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'x'},
-// CHECK:STDOUT:           {kind: 'StructLiteralOrStructTypeLiteralStart', text: '{'},
-// CHECK:STDOUT:               {kind: 'IdentifierName', text: 'a'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameNotBeforeParams', text: 'x'},
+// CHECK:STDOUT:           {kind: 'StructLiteralStart', text: '{'},
+// CHECK:STDOUT:               {kind: 'IdentifierNameNotBeforeParams', text: 'a'},
 // CHECK:STDOUT:             {kind: 'StructFieldDesignator', text: '.', subtree_size: 2},
 // CHECK:STDOUT:             {kind: 'IntLiteral', text: '0'},
-// CHECK:STDOUT:           {kind: 'StructFieldValue', text: '=', subtree_size: 4},
-// CHECK:STDOUT:           {kind: 'StructComma', text: ','},
+// CHECK:STDOUT:           {kind: 'StructLiteralField', text: '=', subtree_size: 4},
+// CHECK:STDOUT:           {kind: 'StructLiteralComma', text: ','},
 // CHECK:STDOUT:           {kind: 'InvalidParse', text: ',', has_error: yes},
-// CHECK:STDOUT:           {kind: 'StructComma', text: ','},
+// CHECK:STDOUT:           {kind: 'StructLiteralComma', text: ','},
 // CHECK:STDOUT:         {kind: 'StructLiteral', text: '}', has_error: yes, subtree_size: 9},
 // CHECK:STDOUT:       {kind: 'BindingPattern', text: ':', subtree_size: 11},
 // CHECK:STDOUT:       {kind: 'VariableInitializer', text: '='},
-// CHECK:STDOUT:         {kind: 'StructLiteralOrStructTypeLiteralStart', text: '{'},
+// CHECK:STDOUT:         {kind: 'StructLiteralStart', text: '{'},
 // CHECK:STDOUT:       {kind: 'StructLiteral', text: '}', subtree_size: 2},
 // CHECK:STDOUT:     {kind: 'VariableDecl', text: ';', subtree_size: 16},
 // CHECK:STDOUT:     {kind: 'FileEnd', text: ''},

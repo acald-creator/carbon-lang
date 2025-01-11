@@ -5,19 +5,20 @@
 #ifndef CARBON_COMMON_OSTREAM_H_
 #define CARBON_COMMON_OSTREAM_H_
 
+// Libraries should include this header instead of raw_ostream.
+
 #include <concepts>
 #include <ostream>
 #include <type_traits>
 
-#include "llvm/Support/raw_os_ostream.h"
-// Libraries should include this header instead of raw_ostream.
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/raw_os_ostream.h"
 #include "llvm/Support/raw_ostream.h"  // IWYU pragma: export
 
 namespace Carbon {
 
 // CRTP base class for printable types. Children (DerivedT) must implement:
-// - auto Print(llvm::raw_ostream& out) -> void
+// - auto Print(llvm::raw_ostream& out) const -> void
 template <typename DerivedT>
 class Printable {
   // Provides simple printing for debuggers.
@@ -54,6 +55,7 @@ class Printable {
 
 // Returns the result of printing the value.
 template <typename T>
+  requires std::derived_from<T, Printable<T>>
 inline auto PrintToString(const T& val) -> std::string {
   std::string str;
   llvm::raw_string_ostream stream(str);

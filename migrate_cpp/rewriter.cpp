@@ -222,7 +222,7 @@ auto RewriteBuilder::VisitIntegerLiteral(clang::IntegerLiteral* expr) -> bool {
       c = '_';
     }
   }
-  SetReplacement(expr, {OutputSegment(std::move(text))});
+  SetReplacement(expr, OutputSegment(std::move(text)));
   return true;
 }
 
@@ -297,6 +297,7 @@ auto RewriteBuilder::VisitUnaryOperator(clang::UnaryOperator* expr) -> bool {
   return true;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): Recursion may be okay for migration.
 auto RewriteBuilder::TraverseFunctionDecl(clang::FunctionDecl* decl) -> bool {
   clang::TypeLoc return_type_loc = decl->getFunctionTypeLoc().getReturnLoc();
   if (!TraverseTypeLoc(return_type_loc)) {
@@ -345,6 +346,7 @@ auto RewriteBuilder::TraverseFunctionDecl(clang::FunctionDecl* decl) -> bool {
   return true;
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): Recursion may be okay for migration.
 auto RewriteBuilder::TraverseVarDecl(clang::VarDecl* decl) -> bool {
   clang::TypeLoc loc = decl->getTypeSourceInfo()->getTypeLoc();
   if (!TraverseTypeLoc(loc)) {

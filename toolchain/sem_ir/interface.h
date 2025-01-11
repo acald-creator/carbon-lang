@@ -5,41 +5,15 @@
 #ifndef CARBON_TOOLCHAIN_SEM_IR_INTERFACE_H_
 #define CARBON_TOOLCHAIN_SEM_IR_INTERFACE_H_
 
+#include "toolchain/sem_ir/entity_with_params_base.h"
 #include "toolchain/sem_ir/ids.h"
 
 namespace Carbon::SemIR {
 
-// An interface.
-struct Interface : public Printable<Interface> {
-  auto Print(llvm::raw_ostream& out) const -> void {
-    out << "{name: " << name_id << ", enclosing_scope: " << enclosing_scope_id
-        << "}";
-  }
-
-  // Determines whether this interface has been fully defined. This is false
-  // until we reach the `}` of the interface definition.
-  auto is_defined() const -> bool { return associated_entities_id.is_valid(); }
-
-  // Determines whether we're currently defining the interface. This is true
-  // between the braces of the interface.
-  auto is_being_defined() const -> bool {
-    return definition_id.is_valid() && !is_defined();
-  }
-
-  // The following members always have values, and do not change throughout the
-  // lifetime of the interface.
-
-  // The interface name.
-  NameId name_id;
-  // The enclosing scope.
-  NameScopeId enclosing_scope_id;
-  // The first declaration of the interface. This is a InterfaceDecl.
-  InstId decl_id;
-
+// Interface-specific fields.
+struct InterfaceFields {
   // The following members are set at the `{` of the interface definition.
 
-  // The definition of the interface. This is a InterfaceDecl.
-  InstId definition_id = InstId::Invalid;
   // The interface scope.
   NameScopeId scope_id = NameScopeId::Invalid;
   // The first block of the interface body.
@@ -50,6 +24,27 @@ struct Interface : public Printable<Interface> {
 
   // The following members are set at the `}` of the interface definition.
   InstBlockId associated_entities_id = InstBlockId::Invalid;
+};
+
+// An interface. See EntityWithParamsBase regarding the inheritance here.
+struct Interface : public EntityWithParamsBase,
+                   public InterfaceFields,
+                   public Printable<Interface> {
+  auto Print(llvm::raw_ostream& out) const -> void {
+    out << "{";
+    PrintBaseFields(out);
+    out << "}";
+  }
+
+  // Determines whether this interface has been fully defined. This is false
+  // until we reach the `}` of the interface definition.
+  auto is_defined() const -> bool { return associated_entities_id.is_valid(); }
+
+  // Determines whether we're currently defining the interface. This is true
+  // between the braces of the interface.
+  auto is_being_defined() const -> bool {
+    return has_definition_started() && !is_defined();
+  }
 };
 
 }  // namespace Carbon::SemIR

@@ -3,13 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/namespace/fail_modifiers.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/namespace/fail_modifiers.carbon
 
 virtual namespace B
 
-// CHECK:STDERR: fail_modifiers.carbon:[[@LINE+6]]:1: ERROR: `namespace` declarations must end with a `;`.
+// CHECK:STDERR: fail_modifiers.carbon:[[@LINE+7]]:1: error: `namespace` declarations must end with a `;` [ExpectedDeclSemi]
 // CHECK:STDERR: impl namespace
 // CHECK:STDERR: ^~~~
-// CHECK:STDERR: fail_modifiers.carbon:[[@LINE+3]]:6: ERROR: `namespace` introducer should be followed by a name.
+// CHECK:STDERR:
+// CHECK:STDERR: fail_modifiers.carbon:[[@LINE+3]]:6: error: `namespace` introducer should be followed by a name [ExpectedDeclName]
 // CHECK:STDERR: impl namespace
 // CHECK:STDERR:      ^~~~~~~~~
 impl namespace
@@ -19,7 +24,7 @@ impl namespace
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:       {kind: 'NamespaceStart', text: 'namespace'},
 // CHECK:STDOUT:       {kind: 'VirtualModifier', text: 'virtual'},
-// CHECK:STDOUT:       {kind: 'IdentifierName', text: 'B'},
+// CHECK:STDOUT:       {kind: 'IdentifierNameNotBeforeParams', text: 'B'},
 // CHECK:STDOUT:     {kind: 'Namespace', text: 'impl', has_error: yes, subtree_size: 4},
 // CHECK:STDOUT:       {kind: 'NamespaceStart', text: 'namespace'},
 // CHECK:STDOUT:       {kind: 'InvalidParse', text: '', has_error: yes},

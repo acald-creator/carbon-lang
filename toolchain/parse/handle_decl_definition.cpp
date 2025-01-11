@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 
@@ -13,29 +14,16 @@ static auto HandleDeclOrDefinition(Context& context, NodeKind decl_kind,
                                    State definition_finish_state) -> void {
   auto state = context.PopState();
 
-  if (state.has_error) {
-    context.RecoverFromDeclError(state, decl_kind,
-                                 /*skip_past_likely_end=*/true);
-    return;
-  }
-
-  if (auto semi = context.ConsumeIf(Lex::TokenKind::Semi)) {
-    context.AddNode(decl_kind, *semi, state.subtree_start, state.has_error);
-    return;
-  }
-
-  if (!context.PositionIs(Lex::TokenKind::OpenCurlyBrace)) {
-    context.EmitExpectedDeclSemiOrDefinition(
-        context.tokens().GetKind(state.token));
-    context.RecoverFromDeclError(state, decl_kind,
-                                 /*skip_past_likely_end=*/true);
+  if (state.has_error || !context.PositionIs(Lex::TokenKind::OpenCurlyBrace)) {
+    context.AddNodeExpectingDeclSemi(state, decl_kind,
+                                     context.tokens().GetKind(state.token),
+                                     /*is_def_allowed=*/true);
     return;
   }
 
   context.PushState(state, definition_finish_state);
   context.PushState(State::DeclScopeLoop);
-  context.AddNode(definition_start_kind, context.Consume(), state.subtree_start,
-                  state.has_error);
+  context.AddNode(definition_start_kind, context.Consume(), state.has_error);
 }
 
 auto HandleDeclOrDefinitionAsClass(Context& context) -> void {
@@ -67,8 +55,7 @@ static auto HandleDeclDefinitionFinish(Context& context,
                                        NodeKind definition_kind) -> void {
   auto state = context.PopState();
 
-  context.AddNode(definition_kind, context.Consume(), state.subtree_start,
-                  state.has_error);
+  context.AddNode(definition_kind, context.Consume(), state.has_error);
 }
 
 auto HandleDeclDefinitionFinishAsClass(Context& context) -> void {

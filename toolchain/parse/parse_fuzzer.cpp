@@ -6,7 +6,8 @@
 #include <cstring>
 
 #include "llvm/ADT/StringRef.h"
-#include "toolchain/base/value_store.h"
+#include "testing/fuzzing/libfuzzer.h"
+#include "toolchain/base/shared_value_stores.h"
 #include "toolchain/diagnostics/null_diagnostics.h"
 #include "toolchain/lex/lex.h"
 #include "toolchain/parse/parse.h"
@@ -14,8 +15,7 @@
 namespace Carbon::Testing {
 
 // NOLINTNEXTLINE: Match the documented fuzzer entry point declaration style.
-extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data,
-                                      std::size_t size) {
+extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
   // Ignore large inputs.
   // TODO: See tokenized_buffer_fuzzer.cpp.
   if (size > 100000) {

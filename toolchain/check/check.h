@@ -6,34 +6,37 @@
 #define CARBON_TOOLCHAIN_CHECK_CHECK_H_
 
 #include "common/ostream.h"
-#include "toolchain/base/value_store.h"
+#include "toolchain/base/shared_value_stores.h"
+#include "toolchain/base/timings.h"
+#include "toolchain/check/sem_ir_diagnostic_converter.h"
 #include "toolchain/diagnostics/diagnostic_emitter.h"
-#include "toolchain/lex/tokenized_buffer.h"
-#include "toolchain/parse/tree.h"
+#include "toolchain/parse/tree_and_subtrees.h"
 #include "toolchain/sem_ir/file.h"
 
 namespace Carbon::Check {
 
-// Constructs builtins. A single instance should be reused with CheckParseTree
-// calls associated with a given compilation.
-inline auto MakeBuiltins(SharedValueStores& value_stores) -> SemIR::File {
-  return SemIR::File(value_stores);
-}
-
 // Checking information that's tracked per file.
 struct Unit {
-  SharedValueStores* value_stores;
-  const Lex::TokenizedBuffer* tokens;
-  const Parse::Tree* parse_tree;
   DiagnosticConsumer* consumer;
-  // The generated IR. Unset on input, set on output.
-  std::optional<SemIR::File>* sem_ir;
+  SharedValueStores* value_stores;
+  // The `timings` may be null if nothing is to be recorded.
+  Timings* timings;
+
+  // Returns a lazily constructed TreeAndSubtrees.
+  llvm::function_ref<const Parse::TreeAndSubtrees&()>
+      get_parse_tree_and_subtrees;
+
+  // The unit's SemIR, provided as empty and filled in by CheckParseTrees.
+  SemIR::File* sem_ir;
+
+  // Diagnostic converters.
+  Parse::NodeLocConverter* node_converter;
+  SemIRDiagnosticConverter* sem_ir_converter;
 };
 
 // Checks a group of parse trees. This will use imports to decide the order of
 // checking.
-auto CheckParseTrees(const SemIR::File& builtin_ir,
-                     llvm::MutableArrayRef<Unit> units,
+auto CheckParseTrees(llvm::MutableArrayRef<Unit> units, bool prelude_import,
                      llvm::raw_ostream* vlog_stream) -> void;
 
 }  // namespace Carbon::Check

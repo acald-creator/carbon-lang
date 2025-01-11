@@ -7,8 +7,22 @@
 load("@bazel_cc_toolchain//:clang_detected_variables.bzl", "llvm_symbolizer")
 
 def cc_env():
-    """Returns standard environment settings for a cc_binary."""
-    env = {"LLVM_SYMBOLIZER_PATH": llvm_symbolizer}
+    """Returns standard environment settings for a cc_binary.
+
+    In use, this looks like:
+
+    ```
+    load("//bazel/cc_toolchains:defs.bzl", "cc_env")
+
+    cc_binary(
+      ...
+      env = cc_env(),
+    )
+    ```
+
+    We're currently setting this on a target-by-target basis, mainly because
+    it's difficult to modify default behaviors.
+    """
 
     # On macOS, there's a nano zone allocation warning due to asan (arises
     # in fastbuild/dbg). This suppresses the warning in `bazel run`.
@@ -17,6 +31,11 @@ def cc_env():
     # within the select.
     # https://github.com/bazelbuild/bazel/issues/12457
     return select({
-        "//bazel/cc_toolchains:macos_asan": env.update({"MallocNanoZone": "0"}),
-        "//conditions:default": env,
+        "//bazel/cc_toolchains:macos_asan": {
+            "LLVM_SYMBOLIZER_PATH": llvm_symbolizer,
+            "MallocNanoZone": "0",
+        },
+        "//conditions:default": {
+            "LLVM_SYMBOLIZER_PATH": llvm_symbolizer,
+        },
     })

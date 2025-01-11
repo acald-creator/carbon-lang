@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/struct/fail_identifier_equals.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/struct/fail_identifier_equals.carbon
 
-// CHECK:STDERR: fail_identifier_equals.carbon:[[@LINE+3]]:9: ERROR: Expected `.field: field_type` or `.field = value`.
+// CHECK:STDERR: fail_identifier_equals.carbon:[[@LINE+3]]:9: error: expected `.field: field_type` or `.field = value` [ExpectedStructLiteralField]
 // CHECK:STDERR: var x: {a=} = {};
 // CHECK:STDERR:         ^
 var x: {a=} = {};
@@ -13,13 +17,13 @@ var x: {a=} = {};
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:       {kind: 'VariableIntroducer', text: 'var'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'x'},
-// CHECK:STDOUT:           {kind: 'StructLiteralOrStructTypeLiteralStart', text: '{'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameNotBeforeParams', text: 'x'},
+// CHECK:STDOUT:           {kind: 'StructLiteralStart', text: '{'},
 // CHECK:STDOUT:           {kind: 'InvalidParse', text: 'a', has_error: yes},
 // CHECK:STDOUT:         {kind: 'StructLiteral', text: '}', has_error: yes, subtree_size: 3},
 // CHECK:STDOUT:       {kind: 'BindingPattern', text: ':', subtree_size: 5},
 // CHECK:STDOUT:       {kind: 'VariableInitializer', text: '='},
-// CHECK:STDOUT:         {kind: 'StructLiteralOrStructTypeLiteralStart', text: '{'},
+// CHECK:STDOUT:         {kind: 'StructLiteralStart', text: '{'},
 // CHECK:STDOUT:       {kind: 'StructLiteral', text: '}', subtree_size: 2},
 // CHECK:STDOUT:     {kind: 'VariableDecl', text: ';', subtree_size: 10},
 // CHECK:STDOUT:     {kind: 'FileEnd', text: ''},

@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/packages/import/ordering.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/packages/import/ordering.carbon
 
 // --- after_import.carbon
 
@@ -11,13 +15,13 @@ import B;
 
 // --- after_library.carbon
 
-library "A" api;
+library "[[@TEST_NAME]]";
 
 import B;
 
 // --- after_package.carbon
 
-package A api;
+package A;
 
 import B;
 
@@ -26,22 +30,21 @@ import B;
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:       {kind: 'ImportIntroducer', text: 'import'},
 // CHECK:STDOUT:       {kind: 'PackageName', text: 'A'},
-// CHECK:STDOUT:     {kind: 'ImportDirective', text: ';', subtree_size: 3},
+// CHECK:STDOUT:     {kind: 'ImportDecl', text: ';', subtree_size: 3},
 // CHECK:STDOUT:       {kind: 'ImportIntroducer', text: 'import'},
 // CHECK:STDOUT:       {kind: 'PackageName', text: 'B'},
-// CHECK:STDOUT:     {kind: 'ImportDirective', text: ';', subtree_size: 3},
+// CHECK:STDOUT:     {kind: 'ImportDecl', text: ';', subtree_size: 3},
 // CHECK:STDOUT:     {kind: 'FileEnd', text: ''},
 // CHECK:STDOUT:   ]
 // CHECK:STDOUT: - filename: after_library.carbon
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:       {kind: 'LibraryIntroducer', text: 'library'},
-// CHECK:STDOUT:       {kind: 'LibraryName', text: '"A"'},
-// CHECK:STDOUT:       {kind: 'PackageApi', text: 'api'},
-// CHECK:STDOUT:     {kind: 'LibraryDirective', text: ';', subtree_size: 4},
+// CHECK:STDOUT:       {kind: 'LibraryName', text: '"after_library"'},
+// CHECK:STDOUT:     {kind: 'LibraryDecl', text: ';', subtree_size: 3},
 // CHECK:STDOUT:       {kind: 'ImportIntroducer', text: 'import'},
 // CHECK:STDOUT:       {kind: 'PackageName', text: 'B'},
-// CHECK:STDOUT:     {kind: 'ImportDirective', text: ';', subtree_size: 3},
+// CHECK:STDOUT:     {kind: 'ImportDecl', text: ';', subtree_size: 3},
 // CHECK:STDOUT:     {kind: 'FileEnd', text: ''},
 // CHECK:STDOUT:   ]
 // CHECK:STDOUT: - filename: after_package.carbon
@@ -49,10 +52,9 @@ import B;
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:       {kind: 'PackageIntroducer', text: 'package'},
 // CHECK:STDOUT:       {kind: 'PackageName', text: 'A'},
-// CHECK:STDOUT:       {kind: 'PackageApi', text: 'api'},
-// CHECK:STDOUT:     {kind: 'PackageDirective', text: ';', subtree_size: 4},
+// CHECK:STDOUT:     {kind: 'PackageDecl', text: ';', subtree_size: 3},
 // CHECK:STDOUT:       {kind: 'ImportIntroducer', text: 'import'},
 // CHECK:STDOUT:       {kind: 'PackageName', text: 'B'},
-// CHECK:STDOUT:     {kind: 'ImportDirective', text: ';', subtree_size: 3},
+// CHECK:STDOUT:     {kind: 'ImportDecl', text: ';', subtree_size: 3},
 // CHECK:STDOUT:     {kind: 'FileEnd', text: ''},
 // CHECK:STDOUT:   ]

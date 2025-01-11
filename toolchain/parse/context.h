@@ -9,6 +9,7 @@
 
 #include "common/check.h"
 #include "common/vlog.h"
+#include "toolchain/diagnostics/diagnostic_converter.h"
 #include "toolchain/lex/token_kind.h"
 #include "toolchain/lex/tokenized_buffer.h"
 #include "toolchain/parse/node_kind.h"
@@ -39,7 +40,7 @@ class Context {
   // Possible return values for FindListToken.
   enum class ListTokenKind : int8_t { Comma, Close, CommaClose };
 
-  // Used for restricting ordering of `package` and `import` directives.
+  // Used for restricting ordering of `package` and `import` declarations.
   enum class PackagingState : int8_t {
     FileStart,
     InImports,
@@ -56,7 +57,7 @@ class Context {
     auto Print(llvm::raw_ostream& output) const -> void {
       output << state << " @" << token << " subtree_start=" << subtree_start
              << " has_error=" << has_error;
-    };
+    }
 
     // The state.
     State state;
@@ -91,17 +92,29 @@ class Context {
   static_assert(sizeof(StateStackEntry) == 12,
                 "StateStackEntry has unexpected size!");
 
-  explicit Context(Tree& tree, Lex::TokenizedBuffer& tokens,
-                   Lex::TokenDiagnosticEmitter& emitter,
+  explicit Context(Tree* tree, Lex::TokenizedBuffer* tokens,
+                   DiagnosticConsumer* consumer,
                    llvm::raw_ostream* vlog_stream);
 
   // Adds a node to the parse tree that has no children (a leaf).
   auto AddLeafNode(NodeKind kind, Lex::TokenIndex token, bool has_error = false)
-      -> void;
+      -> void {
+    AddNode(kind, token, has_error);
+  }
 
   // Adds a node to the parse tree that has children.
-  auto AddNode(NodeKind kind, Lex::TokenIndex token, int subtree_start,
-               bool has_error) -> void;
+  auto AddNode(NodeKind kind, Lex::TokenIndex token, bool has_error) -> void {
+    CARBON_CHECK(has_error || (kind != NodeKind::InvalidParse &&
+                               kind != NodeKind::InvalidParseStart &&
+                               kind != NodeKind::InvalidParseSubtree),
+                 "{0} nodes must always have an error", kind);
+    tree_->node_impls_.push_back(Tree::NodeImpl(kind, has_error, token));
+  }
+
+  // Adds an invalid parse node.
+  auto AddInvalidParse(Lex::TokenIndex token) -> void {
+    AddNode(NodeKind::InvalidParse, token, /*has_error=*/true);
+  }
 
   // Replaces the placeholder node at the indicated position with a leaf node.
   //
@@ -155,7 +168,12 @@ class Context {
 
   // If the current position's token matches this `Kind`, returns it and
   // advances to the next position. Otherwise returns an empty optional.
-  auto ConsumeIf(Lex::TokenKind kind) -> std::optional<Lex::TokenIndex>;
+  auto ConsumeIf(Lex::TokenKind kind) -> std::optional<Lex::TokenIndex> {
+    if (!PositionIs(kind)) {
+      return std::nullopt;
+    }
+    return Consume();
+  }
 
   // Find the next token of any of the given kinds at the current bracketing
   // level.
@@ -226,14 +244,14 @@ class Context {
   // Pops the state and keeps the value for inspection.
   auto PopState() -> StateStackEntry {
     auto back = state_stack_.pop_back_val();
-    CARBON_VLOG() << "Pop " << state_stack_.size() << ": " << back << "\n";
+    CARBON_VLOG("Pop {0}: {1}\n", state_stack_.size(), back);
     return back;
   }
 
   // Pops the state and discards it.
   auto PopAndDiscardState() -> void {
-    CARBON_VLOG() << "PopAndDiscard " << state_stack_.size() - 1 << ": "
-                  << state_stack_.back() << "\n";
+    CARBON_VLOG("PopAndDiscard {0}: {1}\n", state_stack_.size() - 1,
+                state_stack_.back());
     state_stack_.pop_back();
   }
 
@@ -266,10 +284,10 @@ class Context {
 
   // Pushes a constructed state onto the stack.
   auto PushState(StateStackEntry state) -> void {
-    CARBON_VLOG() << "Push " << state_stack_.size() << ": " << state << "\n";
+    CARBON_VLOG("Push {0}: {1}\n", state_stack_.size(), state);
     state_stack_.push_back(state);
-    CARBON_CHECK(state_stack_.size() < (1 << 20))
-        << "Excessive stack size: likely infinite loop";
+    CARBON_CHECK(state_stack_.size() < (1 << 20),
+                 "Excessive stack size: likely infinite loop");
   }
 
   // Pushes a constructed state onto the stack, with a different parse state.
@@ -281,31 +299,58 @@ class Context {
   // Propagates an error up the state stack, to the parent state.
   auto ReturnErrorOnState() -> void { state_stack_.back().has_error = true; }
 
+  // Adds a node for a declaration's semicolon. Includes error recovery when the
+  // token is not a semicolon, using `decl_kind` and `is_def_allowed` to inform
+  // diagnostics.
+  auto AddNodeExpectingDeclSemi(StateStackEntry state, NodeKind node_kind,
+                                Lex::TokenKind decl_kind, bool is_def_allowed)
+      -> void;
+
   // Emits a diagnostic for a declaration missing a semi.
-  auto EmitExpectedDeclSemi(Lex::TokenKind expected_kind) -> void;
+  auto DiagnoseExpectedDeclSemi(Lex::TokenKind expected_kind) -> void;
 
   // Emits a diagnostic for a declaration missing a semi or definition.
-  auto EmitExpectedDeclSemiOrDefinition(Lex::TokenKind expected_kind) -> void;
+  auto DiagnoseExpectedDeclSemiOrDefinition(Lex::TokenKind expected_kind)
+      -> void;
 
   // Handles error recovery in a declaration, particularly before any possible
   // definition has started (although one could be present). Recover to a
   // semicolon when it makes sense as a possible end, otherwise use the
   // introducer token for the error.
-  auto RecoverFromDeclError(StateStackEntry state, NodeKind parse_node_kind,
+  auto RecoverFromDeclError(StateStackEntry state, NodeKind node_kind,
                             bool skip_past_likely_end) -> void;
 
-  // Sets the package directive information. Called at most once.
-  auto set_packaging_directive(Tree::PackagingNames packaging_names,
-                               Tree::ApiOrImpl api_or_impl) -> void {
-    CARBON_CHECK(!tree_->packaging_directive_);
-    tree_->packaging_directive_ = {.names = packaging_names,
-                                   .api_or_impl = api_or_impl};
+  // Handles parsing of the library name. Returns the name's ID on success,
+  // which may be invalid for `default`.
+  // TODO: Add an invalid node on error, fix callers to adapt.
+  auto ParseLibraryName(bool accept_default)
+      -> std::optional<StringLiteralValueId>;
+
+  // Handles parsing `library <name>`. Requires that the position is a `library`
+  // token. Returns the name's ID on success, which may be invalid for
+  // `default`.
+  auto ParseLibrarySpecifier(bool accept_default)
+      -> std::optional<StringLiteralValueId>;
+
+  // Sets the package declaration information. Called at most once.
+  auto set_packaging_decl(Tree::PackagingNames packaging_names, bool is_impl)
+      -> void {
+    CARBON_CHECK(!tree_->packaging_decl_);
+    tree_->packaging_decl_ = {.names = packaging_names, .is_impl = is_impl};
   }
 
   // Adds an import.
   auto AddImport(Tree::PackagingNames package) -> void {
     tree_->imports_.push_back(package);
   }
+
+  // Adds a function definition start node, and begins tracking a deferred
+  // definition if necessary.
+  auto AddFunctionDefinitionStart(Lex::TokenIndex token, bool has_error)
+      -> void;
+  // Adds a function definition node, and ends tracking a deferred definition if
+  // necessary.
+  auto AddFunctionDefinition(Lex::TokenIndex token, bool has_error) -> void;
 
   // Prints information for a stack dump.
   auto PrintForStackDump(llvm::raw_ostream& output) const -> void;
@@ -314,7 +359,9 @@ class Context {
 
   auto tokens() const -> const Lex::TokenizedBuffer& { return *tokens_; }
 
-  auto emitter() -> Lex::TokenDiagnosticEmitter& { return *emitter_; }
+  auto has_errors() const -> bool { return err_tracker_.seen_error(); }
+
+  auto emitter() -> Lex::TokenDiagnosticEmitter& { return emitter_; }
 
   auto position() -> Lex::TokenIterator& { return position_; }
   auto position() const -> Lex::TokenIterator { return position_; }
@@ -340,13 +387,38 @@ class Context {
   }
 
  private:
+  // Applies the `position_` to the `last_byte_offset` returned by `ConvertLoc`.
+  class TokenDiagnosticConverterForParse
+      : public Lex::TokenDiagnosticConverter {
+   public:
+    explicit TokenDiagnosticConverterForParse(Lex::TokenizedBuffer* tokens,
+                                              Lex::TokenIterator* position)
+        : Lex::TokenDiagnosticConverter(tokens), position_(position) {}
+
+    auto ConvertLoc(Lex::TokenIndex token, ContextFnT context_fn) const
+        -> ConvertedDiagnosticLoc override {
+      auto converted =
+          Lex::TokenDiagnosticConverter::ConvertLoc(token, context_fn);
+      converted.last_byte_offset = std::max(
+          converted.last_byte_offset, tokens().GetByteOffset(**position_));
+      return converted;
+    }
+
+   private:
+    // The position in `Parse()`.
+    Lex::TokenIterator* position_;
+  };
+
   // Prints a single token for a stack dump. Used by PrintForStackDump.
   auto PrintTokenForStackDump(llvm::raw_ostream& output,
                               Lex::TokenIndex token) const -> void;
 
   Tree* tree_;
   Lex::TokenizedBuffer* tokens_;
-  Lex::TokenDiagnosticEmitter* emitter_;
+
+  TokenDiagnosticConverterForParse converter_;
+  ErrorTrackingDiagnosticConsumer err_tracker_;
+  Lex::TokenDiagnosticEmitter emitter_;
 
   // Whether to print verbose output.
   llvm::raw_ostream* vlog_stream_;
@@ -357,6 +429,10 @@ class Context {
   Lex::TokenIterator end_;
 
   llvm::SmallVector<StateStackEntry> state_stack_;
+
+  // The deferred definition indexes of functions whose definitions have begun
+  // but not yet finished.
+  llvm::SmallVector<DeferredDefinitionIndex> deferred_definition_stack_;
 
   // The current packaging state, whether `import`/`package` are allowed.
   PackagingState packaging_state_ = PackagingState::FileStart;

@@ -6,6 +6,11 @@ Exceptions. See /LICENSE for license information.
 SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 -->
 
+<!--
+{% raw %}
+Hides `{{` from jekyll's liquid parsing. Note endraw at the bottom.
+-->
+
 `explorer` is an implementation of Carbon whose primary purpose is to act as a
 clear specification of the language. As an extension of that goal, it can also
 be used as a platform for prototyping and validating changes to the language.
@@ -127,11 +132,6 @@ To explain this boilerplate:
 -   `bazel run testdata/DIR/FILE.carbon.run` -- Runs explorer on the file.
 -   `bazel run testdata/DIR/FILE.carbon.verbose` -- Runs explorer on the file
     with tracing enabled.
-
-### Updating fuzzer logic after making AST changes
-
-Please refer to
-[Fuzzer documentation](https://github.com/carbon-language/carbon-lang/blob/trunk/explorer/fuzzing/README.md).
 
 ## Explorer's Trace Output
 
@@ -334,3 +334,7 @@ information and provide visual separation for different sections.
 - - - - -  Sub Heading - - - - -
 --------------------------------
 ```
+
+<!--
+{% endraw %}
+-->

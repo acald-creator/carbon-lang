@@ -5,7 +5,8 @@
 #ifndef CARBON_TOOLCHAIN_CHECK_SCOPE_STACK_H_
 #define CARBON_TOOLCHAIN_CHECK_SCOPE_STACK_H_
 
-#include "llvm/ADT/DenseSet.h"
+#include "common/array_stack.h"
+#include "common/set.h"
 #include "llvm/ADT/SmallVector.h"
 #include "toolchain/check/lexical_lookup.h"
 #include "toolchain/check/scope_index.h"
@@ -18,7 +19,7 @@ namespace Carbon::Check {
 // checking within.
 class ScopeStack {
  public:
-  explicit ScopeStack(const StringStoreWrapper<IdentifierId>& identifiers)
+  explicit ScopeStack(const CanonicalValueStore<IdentifierId>& identifiers)
       : lexical_lookup_(identifiers) {}
 
   // A scope in which `break` and `continue` can be used.
@@ -45,7 +46,13 @@ class ScopeStack {
 
     // The corresponding name scope.
     SemIR::NameScopeId name_scope_id;
+
+    // The corresponding specific.
+    SemIR::SpecificId specific_id;
   };
+
+  // Information about a scope that has been temporarily removed from the stack.
+  struct SuspendedScope;
 
   // Pushes a scope onto scope_stack_. NameScopeId::Invalid is used for new
   // scopes. lexical_lookup_has_load_error is used to limit diagnostics when a
@@ -53,6 +60,7 @@ class ScopeStack {
   // imports.
   auto Push(SemIR::InstId scope_inst_id = SemIR::InstId::Invalid,
             SemIR::NameScopeId scope_id = SemIR::NameScopeId::Invalid,
+            SemIR::SpecificId specific_id = SemIR::SpecificId::Invalid,
             bool lexical_lookup_has_load_error = false) -> void;
 
   // Pops the top scope from scope_stack_, cleaning up names from
@@ -61,7 +69,7 @@ class ScopeStack {
 
   // Pops the top scope from scope_stack_ if it contains no names.
   auto PopIfEmpty() -> void {
-    if (scope_stack_.back().names.empty()) {
+    if (scope_stack_.back().num_names == 0) {
       Pop();
     }
   }
@@ -78,6 +86,14 @@ class ScopeStack {
   // Returns the instruction associated with the current scope, or Invalid if
   // there is no such instruction, such as for a block scope.
   auto PeekInstId() const -> SemIR::InstId { return Peek().scope_inst_id; }
+
+  // Returns the specific associated with the innermost enclosing scope that is
+  // associated with a specific. This will generally be the self specific of the
+  // innermost enclosing generic, as there is no way to enter any other specific
+  // scope.
+  auto PeekSpecificId() const -> SemIR::SpecificId {
+    return Peek().specific_id;
+  }
 
   // Returns the current scope, if it is of the specified kind. Otherwise,
   // returns nullopt.
@@ -99,11 +115,11 @@ class ScopeStack {
   // lookup result, if any.
   auto LookupInCurrentScope(SemIR::NameId name_id) -> SemIR::InstId;
 
-  // Looks up the name `name_id` in the current scope and its enclosing scopes.
-  // Returns the innermost lexical lookup result, if any, along with a list of
-  // non-lexical scopes in which lookup should also be performed, ordered from
-  // outermost to innermost.
-  auto LookupInEnclosingScopes(SemIR::NameId name_id)
+  // Looks up the name `name_id` in the current scope and related lexical
+  // scopes. Returns the innermost lexical lookup result, if any, along with a
+  // list of non-lexical scopes in which lookup should also be performed,
+  // ordered from outermost to innermost.
+  auto LookupInLexicalScopes(SemIR::NameId name_id)
       -> std::pair<SemIR::InstId, llvm::ArrayRef<NonLexicalScope>>;
 
   // Looks up the name `name_id` in the current scope. Returns the existing
@@ -111,6 +127,26 @@ class ScopeStack {
   // and returns Invalid.
   auto LookupOrAddName(SemIR::NameId name_id, SemIR::InstId target_id)
       -> SemIR::InstId;
+
+  // Prepares to add a compile-time binding in the current scope, and returns
+  // its index. The added binding must then be pushed using
+  // `PushCompileTimeBinding`.
+  auto AddCompileTimeBinding() -> SemIR::CompileTimeBindIndex {
+    auto index = scope_stack_.back().next_compile_time_bind_index;
+    ++scope_stack_.back().next_compile_time_bind_index.index;
+    return index;
+  }
+
+  // Pushes a compile-time binding into the current scope.
+  auto PushCompileTimeBinding(SemIR::InstId bind_id) -> void {
+    compile_time_binding_stack_.AppendToTop(bind_id);
+  }
+
+  // Temporarily removes the top of the stack and its lexical lookup results.
+  auto Suspend() -> SuspendedScope;
+
+  // Restores a suspended scope stack entry.
+  auto Restore(SuspendedScope scope) -> void;
 
   // Runs verification that the processing cleanly finished.
   auto VerifyOnFinish() -> void;
@@ -121,6 +157,10 @@ class ScopeStack {
 
   auto break_continue_stack() -> llvm::SmallVector<BreakContinueScope>& {
     return break_continue_stack_;
+  }
+
+  auto compile_time_bindings_stack() -> ArrayStack<SemIR::InstId>& {
+    return compile_time_binding_stack_;
   }
 
  private:
@@ -140,21 +180,44 @@ class ScopeStack {
     // The name scope associated with this entry, if any.
     SemIR::NameScopeId scope_id;
 
-    // The previous state of lexical_lookup_has_load_error_, restored on pop.
-    bool prev_lexical_lookup_has_load_error;
+    // The specific associated with this entry, if any.
+    SemIR::SpecificId specific_id;
 
-    // Names which are registered with lexical_lookup_, and will need to be
-    // unregistered when the scope ends.
-    llvm::DenseSet<SemIR::NameId> names;
+    // The next compile-time binding index to allocate in this scope.
+    SemIR::CompileTimeBindIndex next_compile_time_bind_index;
+
+    // Whether lexical_lookup_ has load errors from this scope or an ancestor
+    // scope.
+    bool lexical_lookup_has_load_error;
 
     // Whether a `returned var` was introduced in this scope, and needs to be
     // unregistered when the scope ends.
     bool has_returned_var = false;
 
+    // Whether there are any ids in the `names` set.
+    int num_names = 0;
+
+    // Names which are registered with lexical_lookup_, and will need to be
+    // unregistered when the scope ends.
+    Set<SemIR::NameId> names = {};
+
     // TODO: This likely needs to track things which need to be destructed.
   };
 
   auto Peek() const -> const ScopeStackEntry& { return scope_stack_.back(); }
+
+  // Returns whether lexical lookup currently has any load errors.
+  auto LexicalLookupHasLoadError() const -> bool {
+    return !scope_stack_.empty() &&
+           scope_stack_.back().lexical_lookup_has_load_error;
+  }
+
+  // Checks that the provided scope's `next_compile_time_bind_index` matches the
+  // full size of the current `compile_time_binding_stack_`. The values should
+  // always match, and this is used to validate the correspondence during
+  // significant changes.
+  auto VerifyNextCompileTimeBindIndex(llvm::StringLiteral label,
+                                      const ScopeStackEntry& scope) -> void;
 
   // A stack of scopes from which we can `return`.
   llvm::SmallVector<ReturnScope> return_scope_stack_;
@@ -169,16 +232,42 @@ class ScopeStack {
   // the information in scope_stack_.
   llvm::SmallVector<NonLexicalScope> non_lexical_scope_stack_;
 
+  // A stack of the current compile time bindings.
+  ArrayStack<SemIR::InstId> compile_time_binding_stack_;
+
   // The index of the next scope that will be pushed onto scope_stack_. The
   // first is always the package scope.
   ScopeIndex next_scope_index_ = ScopeIndex::Package;
 
   // Tracks lexical lookup results.
   LexicalLookup lexical_lookup_;
+};
 
-  // Whether lexical_lookup_ has load errors, updated whenever scope_stack_ is
-  // pushed or popped.
-  bool lexical_lookup_has_load_error_ = false;
+struct ScopeStack::SuspendedScope {
+  // An item that was suspended within this scope. This represents either a
+  // lexical lookup entry in this scope, or a compile time binding entry in this
+  // scope.
+  //
+  // TODO: For compile-time bindings, the common case is that they will both
+  // have a suspended lexical lookup entry and a suspended compile time binding
+  // entry. We should be able to store that as a single ScopeItem rather than
+  // two.
+  struct ScopeItem {
+    static constexpr uint32_t IndexForCompileTimeBinding = -1;
+
+    // The scope index for a LexicalLookup::SuspendedResult, or
+    // CompileTimeBindingIndex for a suspended compile time binding.
+    uint32_t index;
+    // The instruction within the scope.
+    SemIR::InstId inst_id;
+  };
+
+  // The suspended scope stack entry.
+  ScopeStackEntry entry;
+  // The list of items that were within this scope when it was suspended. The
+  // inline size is an attempt to keep the size of a `SuspendedFunction`
+  // reasonable while avoiding heap allocations most of the time.
+  llvm::SmallVector<ScopeItem, 8> suspended_items;
 };
 
 }  // namespace Carbon::Check

@@ -6,11 +6,16 @@ Exceptions. See /LICENSE for license information.
 SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 -->
 
+<!--
+{% raw %}
+Hides `{{` from jekyll's liquid parsing. Note endraw at the bottom.
+-->
+
 ## BUILD
 
 A typical BUILD target will look like:
 
-```
+```starlark
 load("rules.bzl", "file_test")
 
 file_test(
@@ -20,7 +25,7 @@ file_test(
     deps = [
         ":my_lib",
         "//testing/file_test:file_test_base",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -30,10 +35,9 @@ file_test(
 
 A typical implementation will look like:
 
-```
+```cpp
 #include "my_library.h"
 
-#include "llvm/ADT/StringExtras.h"
 #include "testing/file_test/file_test_base.h"
 
 namespace Carbon::Testing {
@@ -47,8 +51,8 @@ class MyFileTest : public FileTestBase {
   auto Run(const llvm::SmallVector<llvm::StringRef>& test_args,
            const llvm::SmallVector<TestFile>& test_files,
            llvm::raw_pwrite_stream& stdout, llvm::raw_pwrite_stream& stderr)
-      -> ErrorOr<bool> override {
-    MyFunctionality(test_args, stdout, stderr);
+      -> ErrorOr<RunResult> override {
+    return MyFunctionality(test_args, stdout, stderr);
   }
 
   // Provides arguments which are used in tests that don't provide ARGS.
@@ -65,6 +69,32 @@ CARBON_FILE_TEST_FACTORY(MyFileTest);
 }  // namespace Carbon::Testing
 ```
 
+## Filename `fail_` prefixes
+
+When a run fails, information about what pieces failed are returned on
+`RunResult`. This affects whether a `fail_` prefix on the file is required,
+including in combination with split-file tests (using the `// --- <filename>`
+comment marker).
+
+The main test file and any split-files must have a `fail_` prefix if and only if
+they have an associated error. An exception is that the main test file may omit
+`fail_` when it contains split-files that have a `fail_` prefix.
+
+## Content replacement
+
+Some keywords can be inserted for content:
+
+-   ```
+    [[@TEST_NAME]]
+    ```
+
+    Replaces with the test name, which is the filename with the extension and
+    any `fail_` or `todo_` prefixes removed. For split files, this is based on
+    the split filename.
+
+The `[[@` string is reserved for future replacements, but `[[` is allowed in
+content (comment markers don't allow `[[`).
+
 ## Comment markers
 
 Settings in files are provided in comments, similar to `FileCheck` syntax.
@@ -79,8 +109,8 @@ Supported comment markers are:
     ```
 
     Controls whether the checks in the file will be autoupdated if --autoupdate
-    is passed. Exactly one of these two markers must be present. If the file
-    uses splits, AUTOUPDATE must currently be before any splits.
+    is passed. Exactly one of these markers must be present. If the file uses
+    splits, the marker must currently be before any splits.
 
     When autoupdating, CHECKs will be inserted starting below AUTOUPDATE. When a
     CHECK has line information, autoupdate will try to insert the CHECK
@@ -91,7 +121,13 @@ Supported comment markers are:
     check line refers to any line in the test, all STDOUT check lines are placed
     at the end of the file instead of immediately after AUTOUPDATE.
 
--   `// ARGS: <arguments>`
+    When using split files, if the last split file is named
+    `// --- AUTOUPDATE-SPLIT`, all CHECKs will be added there; no line
+    associations occur.
+
+-   ```
+    // ARGS: <arguments>
+    ```
 
     Provides a space-separated list of arguments, which will be passed to
     RunWithFiles as test_args. These are intended for use by the command as
@@ -108,10 +144,40 @@ Supported comment markers are:
 
         Replaced with `${TEST_TMPDIR}/temp_file`.
 
+    -   `%{identifier}`
+
+        Replaces some implementation-specific identifier with a value. (Mappings
+        provided by way of an optional `MyFileTest::GetArgReplacements`)
+
     ARGS can be specified at most once. If not provided, the FileTestBase child
     is responsible for providing default arguments.
 
--   `// SET-CHECK-SUBSET`
+-   ```
+    // EXTRA-ARGS: <arguments>
+    ```
+
+    Same as `ARGS`, including substitution behavior, but appends to the default
+    argument list instead of replacing it.
+
+    `EXTRA-ARGS` can be specified at most once, and a test cannot specify both
+    `ARGS` and `EXTRA-ARGS`.
+
+-   ```
+    // SET-CAPTURE-CONSOLE-OUTPUT
+    ```
+
+    By default, stderr and stdout are expected to be piped through provided
+    streams. Adding this causes the test's own stderr and stdout to be captured
+    and added as well.
+
+    This should be avoided because we are partly ensuring that streams are an
+    API, but is helpful when wrapping Clang, where stderr is used directly.
+
+    SET-CAPTURE-CONSOLE-OUTPUT can be specified at most once.
+
+-   ```
+    // SET-CHECK-SUBSET
+    ```
 
     By default, all lines of output must have a CHECK match. Adding this as a
     option sets it so that non-matching lines are ignored. All provided
@@ -119,7 +185,9 @@ Supported comment markers are:
 
     SET-CHECK-SUBSET can be specified at most once.
 
--   `// --- <filename>`
+-   ```
+    // --- <filename>
+    ```
 
     By default, all file content is provided to the test as a single file in
     test_files. Using this marker allows the file to be split into multiple
@@ -138,3 +206,15 @@ Supported comment markers are:
 
     Output line matchers may contain `[[@LINE+offset]` and `{{regex}}` syntaxes,
     similar to `FileCheck`.
+
+-   ```
+    // TIP: <tip>
+    ```
+
+    Tips like this are added by autoupdate, for example providing commands to
+    run the test directly. Tips have no impact on validation; the marker informs
+    autoupdate that it can update or remove them as needed.
+
+<!--
+{% endraw %}
+-->

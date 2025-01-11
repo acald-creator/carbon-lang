@@ -6,15 +6,15 @@
 
 #include "common/check.h"
 #include "llvm/ADT/StringRef.h"
-#include "toolchain/base/value_store.h"
+#include "testing/fuzzing/libfuzzer.h"
+#include "toolchain/base/shared_value_stores.h"
 #include "toolchain/diagnostics/null_diagnostics.h"
 #include "toolchain/lex/lex.h"
 
 namespace Carbon::Testing {
 
 // NOLINTNEXTLINE: Match the documented fuzzer entry point declaration style.
-extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data,
-                                      std::size_t size) {
+extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
   // Ignore large inputs.
   // TODO: Investigate replacement with an error limit. Content with errors on
   // escaped quotes (`\"` repeated) have O(M * N) behavior for M errors in a
@@ -46,11 +46,11 @@ extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data,
   // token stream.
   for (Lex::TokenIndex token : buffer.tokens()) {
     int line_number = buffer.GetLineNumber(token);
-    CARBON_CHECK(line_number > 0) << "Invalid line number!";
-    CARBON_CHECK(line_number < INT_MAX) << "Invalid line number!";
+    CARBON_CHECK(line_number > 0, "Invalid line number!");
+    CARBON_CHECK(line_number < INT_MAX, "Invalid line number!");
     int column_number = buffer.GetColumnNumber(token);
-    CARBON_CHECK(column_number > 0) << "Invalid line number!";
-    CARBON_CHECK(column_number < INT_MAX) << "Invalid line number!";
+    CARBON_CHECK(column_number > 0, "Invalid line number!");
+    CARBON_CHECK(column_number < INT_MAX, "Invalid line number!");
   }
 
   return 0;

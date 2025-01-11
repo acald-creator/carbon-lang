@@ -3,19 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/operators/fail_invalid_infix.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/operators/fail_invalid_infix.carbon
 
-// CHECK:STDERR: fail_invalid_infix.carbon:[[@LINE+3]]:19: ERROR: Expected expression.
+// CHECK:STDERR: fail_invalid_infix.carbon:[[@LINE+4]]:19: error: expected expression [ExpectedExpr]
 // CHECK:STDERR: var a: i32 = n == ;
 // CHECK:STDERR:                   ^
+// CHECK:STDERR:
 var a: i32 = n == ;
-// CHECK:STDERR: fail_invalid_infix.carbon:[[@LINE+3]]:14: ERROR: Expected expression.
+// CHECK:STDERR: fail_invalid_infix.carbon:[[@LINE+4]]:14: error: expected expression [ExpectedExpr]
 // CHECK:STDERR: var b: i32 = == n;
 // CHECK:STDERR:              ^~
+// CHECK:STDERR:
 var b: i32 = == n;
-// CHECK:STDERR: fail_invalid_infix.carbon:[[@LINE+6]]:14: ERROR: Expected expression.
+// CHECK:STDERR: fail_invalid_infix.carbon:[[@LINE+7]]:14: error: expected expression [ExpectedExpr]
 // CHECK:STDERR: var c: i32 = == ;
 // CHECK:STDERR:              ^~
-// CHECK:STDERR: fail_invalid_infix.carbon:[[@LINE+3]]:17: ERROR: Expected expression.
+// CHECK:STDERR:
+// CHECK:STDERR: fail_invalid_infix.carbon:[[@LINE+3]]:17: error: expected expression [ExpectedExpr]
 // CHECK:STDERR: var c: i32 = == ;
 // CHECK:STDERR:                 ^
 var c: i32 = == ;
@@ -24,7 +31,7 @@ var c: i32 = == ;
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:       {kind: 'VariableIntroducer', text: 'var'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'a'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameNotBeforeParams', text: 'a'},
 // CHECK:STDOUT:         {kind: 'IntTypeLiteral', text: 'i32'},
 // CHECK:STDOUT:       {kind: 'BindingPattern', text: ':', subtree_size: 3},
 // CHECK:STDOUT:       {kind: 'VariableInitializer', text: '='},
@@ -33,7 +40,7 @@ var c: i32 = == ;
 // CHECK:STDOUT:       {kind: 'InfixOperatorEqualEqual', text: '==', has_error: yes, subtree_size: 3},
 // CHECK:STDOUT:     {kind: 'VariableDecl', text: ';', subtree_size: 9},
 // CHECK:STDOUT:       {kind: 'VariableIntroducer', text: 'var'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'b'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameNotBeforeParams', text: 'b'},
 // CHECK:STDOUT:         {kind: 'IntTypeLiteral', text: 'i32'},
 // CHECK:STDOUT:       {kind: 'BindingPattern', text: ':', subtree_size: 3},
 // CHECK:STDOUT:       {kind: 'VariableInitializer', text: '='},
@@ -42,7 +49,7 @@ var c: i32 = == ;
 // CHECK:STDOUT:       {kind: 'InfixOperatorEqualEqual', text: '==', has_error: yes, subtree_size: 3},
 // CHECK:STDOUT:     {kind: 'VariableDecl', text: ';', subtree_size: 9},
 // CHECK:STDOUT:       {kind: 'VariableIntroducer', text: 'var'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'c'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameNotBeforeParams', text: 'c'},
 // CHECK:STDOUT:         {kind: 'IntTypeLiteral', text: 'i32'},
 // CHECK:STDOUT:       {kind: 'BindingPattern', text: ':', subtree_size: 3},
 // CHECK:STDOUT:       {kind: 'VariableInitializer', text: '='},

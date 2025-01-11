@@ -12,6 +12,13 @@
 namespace Carbon {
 
 // Buffers incoming diagnostics for printing and sorting.
+//
+// Sorting is based on `last_byte_offset` without taking the filename into
+// account. When processing multiple files, it's expected that separate
+// consumers will be used in order to keep diagnostics distinct. Typically
+// `Diagnostic::messages[0]` will always be a location in the consumer's primary
+// file, but if it needs to correspond to a different file, the
+// `last_byte_offset` must still indicate an offset within the primary file.
 class SortingDiagnosticConsumer : public DiagnosticConsumer {
  public:
   explicit SortingDiagnosticConsumer(DiagnosticConsumer& next_consumer)
@@ -22,8 +29,8 @@ class SortingDiagnosticConsumer : public DiagnosticConsumer {
     // likely to refer to data that gets destroyed before the diagnostics
     // consumer is destroyed, because the diagnostics consumer is typically
     // created before the objects that diagnostics refer into are created.
-    CARBON_CHECK(diagnostics_.empty())
-        << "Must flush diagnostics consumer before destroying it";
+    CARBON_CHECK(diagnostics_.empty(),
+                 "Must flush diagnostics consumer before destroying it");
   }
 
   // Buffers the diagnostic.
@@ -35,10 +42,7 @@ class SortingDiagnosticConsumer : public DiagnosticConsumer {
   void Flush() override {
     llvm::stable_sort(diagnostics_,
                       [](const Diagnostic& lhs, const Diagnostic& rhs) {
-                        return std::tie(lhs.message.location.line_number,
-                                        lhs.message.location.column_number) <
-                               std::tie(rhs.message.location.line_number,
-                                        rhs.message.location.column_number);
+                        return lhs.last_byte_offset < rhs.last_byte_offset;
                       });
     for (auto& diag : diagnostics_) {
       next_consumer_->HandleDiagnostic(std::move(diag));

@@ -7,6 +7,8 @@
 
 #include <string>
 
+#include "common/error.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -21,31 +23,76 @@ namespace {
 // phase subdirectories.
 class ToolchainFileTest : public FileTestBase {
  public:
-  explicit ToolchainFileTest(llvm::StringRef test_name)
-      : FileTestBase(test_name), component_(GetComponent(test_name)) {}
+  explicit ToolchainFileTest(llvm::StringRef exe_path, std::mutex* output_mutex,
+                             llvm::StringRef test_name)
+      : FileTestBase(output_mutex, test_name),
+        component_(GetComponent(test_name)),
+        installation_(InstallPaths::MakeForBazelRunfiles(exe_path)) {}
+
+  auto GetArgReplacements() -> llvm::StringMap<std::string> override {
+    return {{"core_package_dir", installation_.core_package()}};
+  }
 
   auto Run(const llvm::SmallVector<llvm::StringRef>& test_args,
-           llvm::vfs::InMemoryFileSystem& fs, llvm::raw_pwrite_stream& stdout,
-           llvm::raw_pwrite_stream& stderr) -> ErrorOr<bool> override {
-    Driver driver(fs, stdout, stderr);
-    return driver.RunCommand(test_args);
+           llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem>& fs,
+           llvm::raw_pwrite_stream& stdout, llvm::raw_pwrite_stream& stderr)
+      -> ErrorOr<RunResult> override {
+    CARBON_ASSIGN_OR_RETURN(auto prelude, installation_.ReadPreludeManifest());
+    if (!is_no_prelude()) {
+      for (const auto& file : prelude) {
+        CARBON_RETURN_IF_ERROR(AddFile(*fs, file));
+      }
+    }
+
+    Driver driver(fs, &installation_, stdout, stderr);
+    auto driver_result = driver.RunCommand(test_args);
+
+    RunResult result{
+        .success = driver_result.success,
+        .per_file_success = std::move(driver_result.per_file_success)};
+    // Drop entries that don't look like a file, and entries corresponding to
+    // the prelude. Note this can empty out the list.
+    llvm::erase_if(result.per_file_success,
+                   [&](std::pair<llvm::StringRef, bool> entry) {
+                     return entry.first == "." || entry.first == "-" ||
+                            entry.first.starts_with("not_file") ||
+                            llvm::is_contained(prelude, entry.first);
+                   });
+    return result;
   }
 
   auto GetDefaultArgs() -> llvm::SmallVector<std::string> override {
-    if (component_ == "check") {
-      return {"compile", "--phase=check", "--dump-sem-ir", "%s"};
-    } else if (component_ == "lex") {
-      return {"compile", "--phase=lex", "--dump-tokens", "%s"};
-    } else if (component_ == "lower") {
-      return {"compile", "--phase=lower", "--dump-llvm-ir", "%s"};
-    } else if (component_ == "parse") {
-      return {"compile", "--phase=parse", "--dump-parse-tree", "%s"};
-    } else if (component_ == "codegen" || component_ == "driver") {
-      CARBON_FATAL() << "ARGS is always set in these tests";
-    } else {
-      CARBON_FATAL() << "Unexpected test component " << component_ << ": "
-                     << test_name();
+    if (component_ == "format") {
+      return {"format", "%s"};
     }
+
+    llvm::SmallVector<std::string> args = {
+        "compile", "--include-diagnostic-kind", "--phase=" + component_.str()};
+
+    if (component_ == "lex") {
+      args.insert(args.end(), {"--dump-tokens", "--omit-file-boundary-tokens"});
+    } else if (component_ == "parse") {
+      args.push_back("--dump-parse-tree");
+    } else if (component_ == "check") {
+      args.push_back("--dump-sem-ir");
+    } else if (component_ == "lower") {
+      args.push_back("--dump-llvm-ir");
+    } else {
+      CARBON_FATAL("Unexpected test component {0}: {1}", component_,
+                   test_name());
+    }
+
+    // For `lex` and `parse`, we don't need to import the prelude; exclude it to
+    // focus errors. In other phases we only do this for explicit "no_prelude"
+    // tests.
+    if (component_ == "lex" || component_ == "parse" || is_no_prelude()) {
+      args.push_back("--no-prelude-import");
+    }
+
+    args.insert(
+        args.end(),
+        {"--exclude-dump-file-prefix=" + installation_.core_package(), "%s"});
+    return args;
   }
 
   auto GetDefaultFileRE(llvm::ArrayRef<llvm::StringRef> filenames)
@@ -84,28 +131,48 @@ class ToolchainFileTest : public FileTestBase {
           R"((FileEnd.*column: |FileStart.*line: )( *\d+))");
       RE2::Replace(&check_line, file_token_re, R"(\1{{ *\\d+}})");
     } else {
-      return FileTestBase::DoExtraCheckReplacements(check_line);
+      FileTestBase::DoExtraCheckReplacements(check_line);
     }
   }
 
  private:
+  // Adds a file to the fs.
+  auto AddFile(llvm::vfs::InMemoryFileSystem& fs, llvm::StringRef path)
+      -> ErrorOr<Success> {
+    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> file =
+        llvm::MemoryBuffer::getFile(path);
+    if (file.getError()) {
+      return ErrorBuilder()
+             << "Getting `" << path << "`: " << file.getError().message();
+    }
+    if (!fs.addFile(path, /*ModificationTime=*/0, std::move(*file))) {
+      return ErrorBuilder() << "Duplicate file: `" << path << "`";
+    }
+    return Success();
+  }
+
   // Returns the toolchain subdirectory being tested.
   static auto GetComponent(llvm::StringRef test_name) -> llvm::StringRef {
     // This handles cases where the toolchain directory may be copied into a
     // repository that doesn't put it at the root.
     auto pos = test_name.find("toolchain/");
-    CARBON_CHECK(pos != llvm::StringRef::npos) << test_name;
+    CARBON_CHECK(pos != llvm::StringRef::npos, "{0}", test_name);
     test_name = test_name.drop_front(pos + strlen("toolchain/"));
     test_name = test_name.take_front(test_name.find("/"));
     return test_name;
   }
 
+  auto is_no_prelude() const -> bool {
+    return test_name().find("/no_prelude/") != llvm::StringRef::npos;
+  }
+
   const llvm::StringRef component_;
+  const InstallPaths installation_;
 };
 
 }  // namespace
 
-CARBON_FILE_TEST_FACTORY(ToolchainFileTest);
+CARBON_FILE_TEST_FACTORY(ToolchainFileTest)
 
 }  // namespace Carbon::Testing
 

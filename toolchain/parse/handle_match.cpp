@@ -3,8 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
+
+// TODO: Some handling is producing erroneous nodes, but wasn't diagnosing and
+// needed to. A more specific diagnostic could be added, but we should probably
+// have a larger look at this code and how it produces parse errors. This may be
+// good to re-examine when someone is working on implementing match checking.
+static auto DiagnoseMatchParseTODO(Context& context) -> void {
+  CARBON_DIAGNOSTIC(MatchParseTODO, Error, "TODO: improve match parsing");
+  context.emitter().Emit(*context.position(), MatchParseTODO);
+}
 
 static auto HandleStatementsBlockStart(Context& context, State finish,
                                        NodeKind equal_greater, NodeKind starter,
@@ -14,13 +24,13 @@ static auto HandleStatementsBlockStart(Context& context, State finish,
   if (!context.PositionIs(Lex::TokenKind::EqualGreater)) {
     if (!state.has_error) {
       CARBON_DIAGNOSTIC(ExpectedMatchCaseArrow, Error,
-                        "Expected `=>` introducing statement block.");
+                        "expected `=>` introducing statement block");
       context.emitter().Emit(*context.position(), ExpectedMatchCaseArrow);
     }
 
-    context.AddLeafNode(equal_greater, *context.position(), true);
-    context.AddNode(starter, *context.position(), state.subtree_start, true);
-    context.AddNode(complete, *context.position(), state.subtree_start, true);
+    context.AddLeafNode(equal_greater, *context.position(), /*has_error=*/true);
+    context.AddNode(starter, *context.position(), /*has_error=*/true);
+    context.AddNode(complete, *context.position(), /*has_error=*/true);
     context.SkipPastLikelyEnd(*context.position());
     return;
   }
@@ -30,25 +40,24 @@ static auto HandleStatementsBlockStart(Context& context, State finish,
   if (!context.PositionIs(Lex::TokenKind::OpenCurlyBrace)) {
     if (!state.has_error) {
       CARBON_DIAGNOSTIC(ExpectedMatchCaseBlock, Error,
-                        "Expected `{{` after `=>`.");
+                        "expected `{{` after `=>`");
       context.emitter().Emit(*context.position(), ExpectedMatchCaseBlock);
     }
 
-    context.AddNode(starter, *context.position(), state.subtree_start, true);
-    context.AddNode(complete, *context.position(), state.subtree_start, true);
+    context.AddNode(starter, *context.position(), /*has_error=*/true);
+    context.AddNode(complete, *context.position(), /*has_error=*/true);
     context.SkipPastLikelyEnd(*context.position());
     return;
   }
 
-  context.AddNode(starter, context.Consume(), state.subtree_start,
-                  state.has_error);
+  context.AddNode(starter, context.Consume(), state.has_error);
   context.PushState(state, finish);
   context.PushState(State::StatementScopeLoop);
 }
 
 static auto EmitUnexpectedTokenAndRecover(Context& context) -> void {
   CARBON_DIAGNOSTIC(UnexpectedTokenInMatchCasesBlock, Error,
-                    "Unexpected `{0}`; expected `case`, `default` or `}`.",
+                    "unexpected `{0}`; expected `case`, `default` or `}`",
                     Lex::TokenKind);
   context.emitter().Emit(*context.position(), UnexpectedTokenInMatchCasesBlock,
                          context.PositionKind());
@@ -72,24 +81,24 @@ auto HandleMatchConditionFinish(Context& context) -> void {
   if (!context.PositionIs(Lex::TokenKind::OpenCurlyBrace)) {
     if (!state.has_error) {
       CARBON_DIAGNOSTIC(ExpectedMatchCasesBlock, Error,
-                        "Expected `{{` starting block with cases.");
+                        "expected `{{` starting block with cases");
       context.emitter().Emit(*context.position(), ExpectedMatchCasesBlock);
     }
 
     context.AddNode(NodeKind::MatchStatementStart, *context.position(),
-                    state.subtree_start, true);
+                    /*has_error=*/true);
     context.AddNode(NodeKind::MatchStatement, *context.position(),
-                    state.subtree_start, true);
+                    /*has_error=*/true);
     context.SkipPastLikelyEnd(*context.position());
     return;
   }
 
   context.AddNode(NodeKind::MatchStatementStart, context.Consume(),
-                  state.subtree_start, state.has_error);
+                  state.has_error);
 
   state.has_error = false;
   if (context.PositionIs(Lex::TokenKind::CloseCurlyBrace)) {
-    CARBON_DIAGNOSTIC(ExpectedMatchCases, Error, "Expected cases.");
+    CARBON_DIAGNOSTIC(ExpectedMatchCases, Error, "expected cases");
     context.emitter().Emit(*context.position(), ExpectedMatchCases);
     state.has_error = true;
   }
@@ -118,10 +127,10 @@ auto HandleMatchCaseLoopAfterDefault(Context& context) -> void {
 
   Lex::TokenKind kind = context.PositionKind();
   if (kind == Lex::TokenKind::Case or kind == Lex::TokenKind::Default) {
-    CARBON_DIAGNOSTIC(UnreachableMatchCase, Error, "Unreachable case; `{0}{1}",
-                      Lex::TokenKind, std::string);
-    context.emitter().Emit(*context.position(), UnreachableMatchCase, kind,
-                           "` occurs after the `default`");
+    CARBON_DIAGNOSTIC(UnreachableMatchCase, Error,
+                      "unreachable case; `{0}` occurs after the `default`",
+                      Lex::TokenKind);
+    context.emitter().Emit(*context.position(), UnreachableMatchCase, kind);
 
     context.ReturnErrorOnState();
     context.PushState(State::MatchCaseLoopAfterDefault);
@@ -145,9 +154,9 @@ auto HandleMatchCaseAfterPattern(Context& context) -> void {
   auto state = context.PopState();
   if (state.has_error) {
     context.AddNode(NodeKind::MatchCaseStart, *context.position(),
-                    state.subtree_start, true);
+                    /*has_error=*/true);
     context.AddNode(NodeKind::MatchCase, *context.position(),
-                    state.subtree_start, true);
+                    /*has_error=*/true);
     context.SkipPastLikelyEnd(*context.position());
     return;
   }
@@ -161,17 +170,21 @@ auto HandleMatchCaseAfterPattern(Context& context) -> void {
       context.AddLeafNode(NodeKind::MatchCaseGuardStart, *open_paren);
       context.PushState(State::Expr);
     } else {
+      if (!state.has_error) {
+        DiagnoseMatchParseTODO(context);
+      }
+
       context.AddLeafNode(NodeKind::MatchCaseGuardStart, *context.position(),
                           true);
-      context.AddLeafNode(NodeKind::InvalidParse, *context.position(), true);
+      context.AddInvalidParse(*context.position());
       state = context.PopState();
       context.AddNode(NodeKind::MatchCaseGuard, *context.position(),
-                      state.subtree_start, true);
+                      /*has_error=*/true);
       state = context.PopState();
       context.AddNode(NodeKind::MatchCaseStart, *context.position(),
-                      state.subtree_start, true);
+                      /*has_error=*/true);
       context.AddNode(NodeKind::MatchCase, *context.position(),
-                      state.subtree_start, true);
+                      /*has_error=*/true);
       context.SkipPastLikelyEnd(*context.position());
       return;
     }
@@ -183,11 +196,14 @@ auto HandleMatchCaseGuardFinish(Context& context) -> void {
 
   auto close_paren = context.ConsumeIf(Lex::TokenKind::CloseParen);
   if (close_paren) {
-    context.AddNode(NodeKind::MatchCaseGuard, *close_paren, state.subtree_start,
-                    state.has_error);
+    context.AddNode(NodeKind::MatchCaseGuard, *close_paren, state.has_error);
   } else {
+    if (!state.has_error) {
+      DiagnoseMatchParseTODO(context);
+    }
+
     context.AddNode(NodeKind::MatchCaseGuard, *context.position(),
-                    state.subtree_start, true);
+                    /*has_error=*/true);
     context.ReturnErrorOnState();
     context.SkipPastLikelyEnd(*context.position());
     return;
@@ -204,7 +220,7 @@ auto HandleMatchCaseFinish(Context& context) -> void {
   auto state = context.PopState();
   context.AddNode(NodeKind::MatchCase,
                   context.ConsumeChecked(Lex::TokenKind::CloseCurlyBrace),
-                  state.subtree_start, state.has_error);
+                  state.has_error);
 }
 
 auto HandleMatchDefaultIntroducer(Context& context) -> void {
@@ -219,14 +235,14 @@ auto HandleMatchDefaultFinish(Context& context) -> void {
   auto state = context.PopState();
   context.AddNode(NodeKind::MatchDefault,
                   context.ConsumeChecked(Lex::TokenKind::CloseCurlyBrace),
-                  state.subtree_start, state.has_error);
+                  state.has_error);
 }
 
 auto HandleMatchStatementFinish(Context& context) -> void {
   auto state = context.PopState();
   context.AddNode(NodeKind::MatchStatement,
                   context.ConsumeChecked(Lex::TokenKind::CloseCurlyBrace),
-                  state.subtree_start, state.has_error);
+                  state.has_error);
 }
 
 }  // namespace Carbon::Parse

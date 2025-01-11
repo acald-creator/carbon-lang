@@ -13,67 +13,80 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import tempfile
 import time
-from typing import Dict, Optional
+from typing import NamedTuple, Optional
 import urllib.request
 
+
+# The tools we track releases for.
+class Release(Enum):
+    BAZELISK = "bazelisk"
+    BUILDIFIER = "buildifier"
+    BUILDOZER = "buildozer"
+    TARGET_DETERMINATOR = "target-determinator"
+
+
+class ReleaseInfo(NamedTuple):
+    # The base URL for downloads. Should include the version.
+    url: str
+    # The separator in a binary's name, either `-` or `.`.
+    separator: str
+
+
 _BAZEL_TOOLS_URL = (
-    "https://github.com/bazelbuild/buildtools/releases/download/v6.3.3/"
+    "https://github.com/bazelbuild/buildtools/releases/download/v7.3.1/"
 )
 
-"""Version SHAs.
-
-Gather shas with:
-    for f in buildozer buildifier; do
-        echo \"$f\": {
-        for v in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 \
-            windows-amd64.exe
-        do
-            echo "\"$v\": \"$(wget -q -O - https://github.com/bazelbuild/buildtools/releases/download/v6.3.3/$f-$v | sha256sum | cut -d ' ' -f1)\", # noqa: E501"
-        done
-        echo },
-    done
-"""
-_BAZEL_TOOLS_VERSION_SHAS = {
-    "buildozer": {
-        "darwin-amd64": "9b0bbecb3745250e5ad5a9c36da456699cb55e52999451c3c74047d2b1f0085f",  # noqa: E501
-        "darwin-arm64": "085928dd4deffa1a7fd38c66c4475e37326b2d4942408e8e3d993953ae4c626c",  # noqa: E501
-        "linux-amd64": "1dcdc668d7c775e5bca2d43ac37e036468ca4d139a78fe48ae207d41411c5100",  # noqa: E501
-        "linux-arm64": "94b96d6a3c52d6ef416f0eb96c8a9fe7f6a0757f0458cc8cf190dfc4a5c2d8e7",  # noqa: E501
-        "windows-amd64.exe": "fc1c4f5de391ec6d66f2119c5bd6131d572ae35e92ddffe720e42b619ab158e0",  # noqa: E501
-    },
-    "buildifier": {
-        "darwin-amd64": "3c36a3217bd793815a907a8e5bf81c291e2d35d73c6073914640a5f42e65f73f",  # noqa: E501
-        "darwin-arm64": "9bb366432d515814766afcf6f9010294c13876686fbbe585d5d6b4ff0ca3e982",  # noqa: E501
-        "linux-amd64": "42f798ec532c58e34401985043e660cb19d5ae994e108d19298c7d229547ffca",  # noqa: E501
-        "linux-arm64": "6a03a1cf525045cb686fc67cd5d64cface5092ebefca3c4c93fb6e97c64e07db",  # noqa: E501
-        "windows-amd64.exe": "2761bebc7392d47c2862c43d85201d93efa57249ed09405fd82708867caa787b",  # noqa: E501
-    },
-}
-
-_TARGET_DETERMINATOR_URL = "https://github.com/bazel-contrib/target-determinator/releases/download/v0.25.0/"  # noqa: E501
-
-"""Version SHAs.
-
-Gather shas with:
-    for v in darwin.amd64 darwin.arm64 linux.amd64 linux.arm64 \
-        windows.amd64.exe
-    do
-        echo "\"$v\": \"$(wget -q -O - https://github.com/bazel-contrib/target-determinator/releases/download/v0.25.0/target-determinator.$v | sha256sum | cut -d ' ' -f1)\", # noqa: E501"
-    done
-"""
-_TARGET_DETERMINATOR_SHAS = {
-    "darwin.amd64": "8c7245603dede429b978e214ca327c3f3d686a1bc712c1298fca0396a0f25f23",  # noqa: E501
-    "darwin.arm64": "8f975b471c4a51d32781b757e1ece9700221bfd4c0ea507c18fa382360d1111f",  # noqa: E501
-    "linux.amd64": "c8a09143e9fe6eccc4b27a6be92c5929e5a78034a8d0b4c43dbed4ee539ec903",  # noqa: E501
-    "linux.arm64": "f34618c885d239d77a31f594daf73a67c1133ab4a0376d37a29dbe8d1d2b0b90",  # noqa: E501
-    "windows.amd64.exe": "e14fd75e33d193f579505cf3e641e07025904fc027686e13e154ba8e10ac0f58",  # noqa: E501
+# Structured information per release tool.
+_RELEASES = {
+    Release.BAZELISK: ReleaseInfo(
+        "https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/", "-"
+    ),
+    Release.BUILDIFIER: ReleaseInfo(_BAZEL_TOOLS_URL, "-"),
+    Release.BUILDOZER: ReleaseInfo(_BAZEL_TOOLS_URL, "-"),
+    Release.TARGET_DETERMINATOR: ReleaseInfo(
+        "https://github.com/bazel-contrib/target-determinator/releases/download/v0.30.0/",  # noqa: E501
+        ".",
+    ),
 }
 
 
-class Release(Enum):
-    BUILDOZER = "buildozer"
-    BUILDIFIER = "buildifier"
+# Shas for the tools.
+#
+# To update, change the version in a tool's URL and use
+# `calculate_release_shas.py`. This is maintained separate from _RELEASES just
+# to make copy-paste updates simpler.
+_RELEASE_SHAS = {
+    Release.BAZELISK: {
+        "darwin-amd64": "0af019eeb642fa70744419d02aa32df55e6e7a084105d49fb26801a660aa56d3",  # noqa: E501
+        "darwin-arm64": "b13dd89c6ecd90944ca3539f5a2c715a18f69b7458878c471a902a8e482ceb4b",  # noqa: E501
+        "linux-amd64": "fd8fdff418a1758887520fa42da7e6ae39aefc788cf5e7f7bb8db6934d279fc4",  # noqa: E501
+        "linux-arm64": "4c8d966e40ac2c4efcc7f1a5a5cceef2c0a2f16b957e791fa7a867cce31e8fcb",  # noqa: E501
+        "windows-amd64.exe": "641a3dfebd717703675f912917735c44b45cf6300bfdfb924537f3cfbffcdd92",  # noqa: E501
+    },
+    Release.BUILDIFIER: {
+        "darwin-amd64": "375f823103d01620aaec20a0c29c6cbca99f4fd0725ae30b93655c6704f44d71",  # noqa: E501
+        "darwin-arm64": "5a6afc6ac7a09f5455ba0b89bd99d5ae23b4174dc5dc9d6c0ed5ce8caac3f813",  # noqa: E501
+        "linux-amd64": "5474cc5128a74e806783d54081f581662c4be8ae65022f557e9281ed5dc88009",  # noqa: E501
+        "linux-arm64": "0bf86c4bfffaf4f08eed77bde5b2082e4ae5039a11e2e8b03984c173c34a561c",  # noqa: E501
+        "windows-amd64.exe": "370cd576075ad29930a82f5de132f1a1de4084c784a82514bd4da80c85acf4a8",  # noqa: E501
+    },
+    Release.BUILDOZER: {
+        "darwin-amd64": "854c9583efc166602276802658cef3f224d60898cfaa60630b33d328db3b0de2",  # noqa: E501
+        "darwin-arm64": "31b1bfe20d7d5444be217af78f94c5c43799cdf847c6ce69794b7bf3319c5364",  # noqa: E501
+        "linux-amd64": "3305e287b3fcc68b9a35fd8515ee617452cd4e018f9e6886b6c7cdbcba8710d4",  # noqa: E501
+        "linux-arm64": "0b5a2a717ac4fc911e1fec8d92af71dbb4fe95b10e5213da0cc3d56cea64a328",  # noqa: E501
+        "windows-amd64.exe": "58d41ce53257c5594c9bc86d769f580909269f68de114297f46284fbb9023dcf",  # noqa: E501
+    },
+    Release.TARGET_DETERMINATOR: {
+        "darwin.amd64": "faa79bed4f3b516e64532beafabf4c340aa0f67c52770d9e74782b8d32033b8c",  # noqa: E501
+        "darwin.arm64": "0536158d45ac9d59e5fb5fd9f061a407f28e9e3d9d95ccaa4832583ed4cf13b8",  # noqa: E501
+        "linux.amd64": "2c75ff991eb5fe46d6df3f6266cac8fb8f3abf4037be486e4c5dc871bd6c4d64",  # noqa: E501
+        "linux.arm64": "5ec31448c87a972583e0213028e83fefe7f566ccc9d64412e333ed12390573c5",  # noqa: E501
+        "windows.amd64.exe": "11449d0388deae5b04372be35e4b480f3beeffa8b954e707d60ebd15d3ebe428",  # noqa: E501
+    },
+}
 
 
 def chdir_repo_root() -> None:
@@ -81,7 +94,7 @@ def chdir_repo_root() -> None:
 
     This is done so that scripts run from a consistent directory.
     """
-    os.chdir(Path(__file__).parent.parent)
+    os.chdir(Path(__file__).parents[1])
 
 
 def _get_hash(file: Path) -> str:
@@ -107,6 +120,11 @@ def _download(url: str, local_path: Path) -> Optional[int]:
 
 
 def _get_cached_binary(name: str, url: str, want_hash: str) -> str:
+    """Returns the path to the cached binary.
+
+    If the matching version is already cached, returns it. Otherwise, downloads
+    from the URL and verifies the hash matches.
+    """
     cache_dir = Path.home().joinpath(".cache", "carbon-lang-scripts")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -161,7 +179,7 @@ def _get_platform_ext() -> str:
         return ""
 
 
-def _select_hash(hashes: Dict[str, str], version: str) -> str:
+def _select_hash(hashes: dict[str, str], version: str) -> str:
     # Ensure the platform version is supported and has a hash.
     if version not in hashes:
         # If this because a platform support issue, we may need to print errors.
@@ -169,36 +187,51 @@ def _select_hash(hashes: Dict[str, str], version: str) -> str:
     return hashes[version]
 
 
-def get_target_determinator() -> str:
-    """Install the Bazel target-determinator tool to carbon-lang's cache."""
-    # Translate platform information into this tool's release binary form.
-    version = f"{platform.system().lower()}.{_get_machine()}"
-    ext = _get_platform_ext()
-    url = f"{_TARGET_DETERMINATOR_URL}/target-determinator.{version}{ext}"
-    want_hash = _select_hash(_TARGET_DETERMINATOR_SHAS, version)
-
-    return _get_cached_binary(f"target-determinator{ext}", url, want_hash)
-
-
 def get_release(release: Release) -> str:
-    """Install a Bazel-released tool to carbon-lang's cache.
+    """Install a tool to carbon-lang's cache and return its path.
 
     release: The release to cache.
     """
+    info = _RELEASES[release]
+    shas = _RELEASE_SHAS[release]
+
     # Translate platform information into Bazel's release form.
-    version = f"{platform.system().lower()}-{_get_machine()}"
     ext = _get_platform_ext()
-    url = f"{_BAZEL_TOOLS_URL}/{release.value}-{version}{ext}"
-    want_hash = _select_hash(_BAZEL_TOOLS_VERSION_SHAS[release.value], version)
+    platform_label = (
+        f"{platform.system().lower()}{info.separator}{_get_machine()}{ext}"
+    )
+    url = f"{info.url}/{release.value}{info.separator}{platform_label}"
+    want_hash = _select_hash(shas, platform_label)
 
     return _get_cached_binary(f"{release.value}{ext}", url, want_hash)
+
+
+def calculate_release_shas() -> None:
+    """Prints sha information for tracked tool releases."""
+    print("_RELEASE_SHAS = {")
+    for release, info in _RELEASES.items():
+        shas = _RELEASE_SHAS[release]
+
+        print(f"  {release}: {{")
+        for platform_label in shas.keys():
+            url = f"{info.url}/{release.value}{info.separator}{platform_label}"
+            with tempfile.NamedTemporaryFile() as f:
+                path = Path(f.name)
+                _download(url, path)
+                hash = _get_hash(path)
+            print(f'    "{platform_label}": "{hash}",  # noqa: E501')
+        print("  },")
+    print("}")
 
 
 def locate_bazel() -> str:
     """Returns the bazel command.
 
-    We use the `BAZEL` environment variable if present. If not, then we try to
-    use `bazelisk` and then `bazel`.
+    In order, try:
+    1. The `BAZEL` environment variable.
+    2. `bazelisk`
+    3. `bazel`
+    4. `run_bazelisk.py`
     """
     bazel = os.environ.get("BAZEL")
     if bazel:
@@ -209,4 +242,4 @@ def locate_bazel() -> str:
         if target:
             return target
 
-    exit("Unable to run Bazel")
+    return str(Path(__file__).parent / "run_bazelisk.py")

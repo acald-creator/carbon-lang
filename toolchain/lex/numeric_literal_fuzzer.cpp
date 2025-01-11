@@ -5,16 +5,16 @@
 #include <cstring>
 
 #include "llvm/ADT/StringRef.h"
+#include "testing/fuzzing/libfuzzer.h"
 #include "toolchain/diagnostics/null_diagnostics.h"
 #include "toolchain/lex/numeric_literal.h"
 
 namespace Carbon::Testing {
 
 // NOLINTNEXTLINE: Match the documented fuzzer entry point declaration style.
-extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data,
-                                      std::size_t size) {
+extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
   auto token = Lex::NumericLiteral::Lex(
-      llvm::StringRef(reinterpret_cast<const char*>(data), size));
+      llvm::StringRef(reinterpret_cast<const char*>(data), size), true);
   if (!token) {
     // Lexically not a numeric literal.
     return 0;

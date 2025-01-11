@@ -3,35 +3,35 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/check/context.h"
+#include "toolchain/check/handle.h"
 
 namespace Carbon::Check {
 
-auto HandleEmptyDecl(Context& /*context*/, Parse::EmptyDeclId /*parse_node*/)
+auto HandleParseNode(Context& /*context*/, Parse::EmptyDeclId /*node_id*/)
     -> bool {
   // Empty declarations have no actions associated.
   return true;
 }
 
-auto HandleInvalidParse(Context& context, Parse::InvalidParseId parse_node)
+auto HandleParseNode(Context& /*context*/, Parse::InvalidParseId /*node_id*/)
     -> bool {
-  return context.TODO(parse_node, "HandleInvalidParse");
+  CARBON_FATAL("Unreachable until we support checking error parse nodes");
 }
 
-auto HandleInvalidParseStart(Context& context,
-                             Parse::InvalidParseStartId parse_node) -> bool {
-  return context.TODO(parse_node, "HandleInvalidParseStart");
+auto HandleParseNode(Context& /*context*/,
+                     Parse::InvalidParseStartId /*node_id*/) -> bool {
+  CARBON_FATAL("Unreachable until we support checking error parse nodes");
 }
 
-auto HandleInvalidParseSubtree(Context& context,
-                               Parse::InvalidParseSubtreeId parse_node)
+auto HandleParseNode(Context& /*context*/,
+                     Parse::InvalidParseSubtreeId /*node_id*/) -> bool {
+  CARBON_FATAL("Unreachable until we support checking error parse nodes");
+}
+
+auto HandleParseNode(Context& /*context*/, Parse::PlaceholderId /*node_id*/)
     -> bool {
-  return context.TODO(parse_node, "HandleInvalidParseSubtree");
-}
-
-auto HandlePlaceholder(Context& /*context*/,
-                       Parse::PlaceholderId /*parse_node*/) -> bool {
-  CARBON_FATAL()
-      << "Placeholder node should always be replaced before parse completes";
+  CARBON_FATAL(
+      "Placeholder node should always be replaced before parse completes");
 }
 
 }  // namespace Carbon::Check

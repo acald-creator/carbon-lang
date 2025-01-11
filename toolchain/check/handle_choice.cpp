@@ -3,28 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/check/context.h"
+#include "toolchain/check/handle.h"
 
 namespace Carbon::Check {
 
-auto HandleChoiceDefinition(Context& context,
-                            Parse::ChoiceDefinitionId parse_node) -> bool {
-  return context.TODO(parse_node, "HandleChoiceDefinition");
-}
-
-auto HandleChoiceIntroducer(Context& context,
-                            Parse::ChoiceIntroducerId parse_node) -> bool {
-  return context.TODO(parse_node, "HandleChoiceIntroducer");
-}
-
-auto HandleChoiceDefinitionStart(Context& context,
-                                 Parse::ChoiceDefinitionStartId parse_node)
+auto HandleParseNode(Context& context, Parse::ChoiceDefinitionId node_id)
     -> bool {
-  return context.TODO(parse_node, "HandleChoiceDefinitionStart");
+  return context.TODO(node_id, "HandleChoiceDefinition");
 }
 
-auto HandleChoiceAlternativeListComma(
-    Context& context, Parse::ChoiceAlternativeListCommaId parse_node) -> bool {
-  return context.TODO(parse_node, "HandleChoiceAlternativeListComma");
+auto HandleParseNode(Context& context, Parse::ChoiceIntroducerId node_id)
+    -> bool {
+  return context.TODO(node_id, "HandleChoiceIntroducer");
+}
+
+auto HandleParseNode(Context& context, Parse::ChoiceDefinitionStartId node_id)
+    -> bool {
+  return context.TODO(node_id, "HandleChoiceDefinitionStart");
+}
+
+auto HandleParseNode(Context& context,
+                     Parse::ChoiceAlternativeListCommaId node_id) -> bool {
+  return context.TODO(node_id, "HandleChoiceAlternativeListComma");
 }
 
 }  // namespace Carbon::Check
