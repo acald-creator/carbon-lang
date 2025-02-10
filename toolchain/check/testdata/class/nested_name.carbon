@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/check/testdata/class/nested_name.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/check/testdata/class/nested_name.carbon
 
 class Outer {
   class Inner {
@@ -23,37 +27,67 @@ fn G(o: Outer) {
 // CHECK:STDOUT: constants {
 // CHECK:STDOUT:   %Outer: type = class_type @Outer [template]
 // CHECK:STDOUT:   %Inner: type = class_type @Inner [template]
-// CHECK:STDOUT:   %.1: type = unbound_element_type Inner, i32 [template]
-// CHECK:STDOUT:   %.2: type = struct_type {.n: i32} [template]
-// CHECK:STDOUT:   %.3: type = struct_type {} [template]
-// CHECK:STDOUT:   %.4: type = ptr_type {.n: i32} [template]
-// CHECK:STDOUT:   %.5: type = tuple_type () [template]
-// CHECK:STDOUT:   %.6: type = ptr_type {} [template]
+// CHECK:STDOUT:   %int_32: Core.IntLiteral = int_value 32 [template]
+// CHECK:STDOUT:   %i32: type = class_type @Int, @Int(%int_32) [template]
+// CHECK:STDOUT:   %Inner.elem: type = unbound_element_type %Inner, %i32 [template]
+// CHECK:STDOUT:   %struct_type.n: type = struct_type {.n: %i32} [template]
+// CHECK:STDOUT:   %complete_type.54b: <witness> = complete_type_witness %struct_type.n [template]
+// CHECK:STDOUT:   %empty_struct_type: type = struct_type {} [template]
+// CHECK:STDOUT:   %complete_type.357: <witness> = complete_type_witness %empty_struct_type [template]
+// CHECK:STDOUT:   %F.type: type = fn_type @F [template]
+// CHECK:STDOUT:   %F: %F.type = struct_value () [template]
+// CHECK:STDOUT:   %G.type: type = fn_type @G [template]
+// CHECK:STDOUT:   %G: %G.type = struct_value () [template]
+// CHECK:STDOUT: }
+// CHECK:STDOUT:
+// CHECK:STDOUT: imports {
+// CHECK:STDOUT:   %Core: <namespace> = namespace file.%Core.import, [template] {
+// CHECK:STDOUT:     .Int = %Core.Int
+// CHECK:STDOUT:     import Core//prelude
+// CHECK:STDOUT:     import Core//prelude/...
+// CHECK:STDOUT:   }
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: file {
 // CHECK:STDOUT:   package: <namespace> = namespace [template] {
+// CHECK:STDOUT:     .Core = imports.%Core
 // CHECK:STDOUT:     .Outer = %Outer.decl
-// CHECK:STDOUT:     .F = %F
-// CHECK:STDOUT:     .G = %G
+// CHECK:STDOUT:     .F = %F.decl
+// CHECK:STDOUT:     .G = %G.decl
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %Outer.decl: type = class_decl @Outer [template = constants.%Outer] {}
-// CHECK:STDOUT:   %F: <function> = fn_decl @F [template] {
-// CHECK:STDOUT:     %Outer.ref.loc13: type = name_ref Outer, %Outer.decl [template = constants.%Outer]
-// CHECK:STDOUT:     %Inner.ref: type = name_ref Inner, @Outer.%Inner.decl [template = constants.%Inner]
-// CHECK:STDOUT:     %oi.loc13_6.1: Inner = param oi
-// CHECK:STDOUT:     @F.%oi: Inner = bind_name oi, %oi.loc13_6.1
-// CHECK:STDOUT:     %return.var: ref i32 = var <return slot>
+// CHECK:STDOUT:   %Core.import = import Core
+// CHECK:STDOUT:   %Outer.decl: type = class_decl @Outer [template = constants.%Outer] {} {}
+// CHECK:STDOUT:   %F.decl: %F.type = fn_decl @F [template = constants.%F] {
+// CHECK:STDOUT:     %oi.patt: %Inner = binding_pattern oi
+// CHECK:STDOUT:     %oi.param_patt: %Inner = value_param_pattern %oi.patt, runtime_param0
+// CHECK:STDOUT:     %return.patt: %i32 = return_slot_pattern
+// CHECK:STDOUT:     %return.param_patt: %i32 = out_param_pattern %return.patt, runtime_param1
+// CHECK:STDOUT:   } {
+// CHECK:STDOUT:     %int_32: Core.IntLiteral = int_value 32 [template = constants.%int_32]
+// CHECK:STDOUT:     %i32: type = class_type @Int, @Int(constants.%int_32) [template = constants.%i32]
+// CHECK:STDOUT:     %oi.param: %Inner = value_param runtime_param0
+// CHECK:STDOUT:     %.loc17: type = splice_block %Inner.ref [template = constants.%Inner] {
+// CHECK:STDOUT:       %Outer.ref: type = name_ref Outer, file.%Outer.decl [template = constants.%Outer]
+// CHECK:STDOUT:       %Inner.ref: type = name_ref Inner, @Outer.%Inner.decl [template = constants.%Inner]
+// CHECK:STDOUT:     }
+// CHECK:STDOUT:     %oi: %Inner = bind_name oi, %oi.param
+// CHECK:STDOUT:     %return.param: ref %i32 = out_param runtime_param1
+// CHECK:STDOUT:     %return: ref %i32 = return_slot %return.param
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %G: <function> = fn_decl @G [template] {
-// CHECK:STDOUT:     %Outer.ref.loc17: type = name_ref Outer, %Outer.decl [template = constants.%Outer]
-// CHECK:STDOUT:     %o.loc17_6.1: Outer = param o
-// CHECK:STDOUT:     @G.%o: Outer = bind_name o, %o.loc17_6.1
+// CHECK:STDOUT:   %G.decl: %G.type = fn_decl @G [template = constants.%G] {
+// CHECK:STDOUT:     %o.patt: %Outer = binding_pattern o
+// CHECK:STDOUT:     %o.param_patt: %Outer = value_param_pattern %o.patt, runtime_param0
+// CHECK:STDOUT:   } {
+// CHECK:STDOUT:     %o.param: %Outer = value_param runtime_param0
+// CHECK:STDOUT:     %Outer.ref: type = name_ref Outer, file.%Outer.decl [template = constants.%Outer]
+// CHECK:STDOUT:     %o: %Outer = bind_name o, %o.param
 // CHECK:STDOUT:   }
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: class @Outer {
-// CHECK:STDOUT:   %Inner.decl: type = class_decl @Inner [template = constants.%Inner] {}
+// CHECK:STDOUT:   %Inner.decl: type = class_decl @Inner [template = constants.%Inner] {} {}
+// CHECK:STDOUT:   %complete_type: <witness> = complete_type_witness %empty_struct_type [template = constants.%complete_type.357]
+// CHECK:STDOUT:   complete_type_witness = %complete_type
 // CHECK:STDOUT:
 // CHECK:STDOUT: !members:
 // CHECK:STDOUT:   .Self = constants.%Outer
@@ -61,27 +95,40 @@ fn G(o: Outer) {
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: class @Inner {
-// CHECK:STDOUT:   %.loc9: <unbound element of class Inner> = field_decl n, element0 [template]
+// CHECK:STDOUT:   %.loc13_10: %Inner.elem = field_decl n, element0 [template]
+// CHECK:STDOUT:   name_binding_decl {
+// CHECK:STDOUT:     %.loc13_5: %Inner.elem = var_pattern %.loc13_10
+// CHECK:STDOUT:   }
+// CHECK:STDOUT:   %.var: ref %Inner.elem = var <none>
+// CHECK:STDOUT:   %complete_type: <witness> = complete_type_witness %struct_type.n [template = constants.%complete_type.54b]
+// CHECK:STDOUT:   complete_type_witness = %complete_type
 // CHECK:STDOUT:
 // CHECK:STDOUT: !members:
 // CHECK:STDOUT:   .Self = constants.%Inner
-// CHECK:STDOUT:   .n = %.loc9
+// CHECK:STDOUT:   .n = %.loc13_10
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
-// CHECK:STDOUT: fn @F(%oi: Inner) -> i32 {
+// CHECK:STDOUT: fn @F(%oi.param_patt: %Inner) -> %i32 {
 // CHECK:STDOUT: !entry:
-// CHECK:STDOUT:   %oi.ref: Inner = name_ref oi, %oi
-// CHECK:STDOUT:   %.loc14_12.1: ref i32 = class_element_access %oi.ref, element0
-// CHECK:STDOUT:   %.loc14_12.2: i32 = bind_value %.loc14_12.1
-// CHECK:STDOUT:   return %.loc14_12.2
+// CHECK:STDOUT:   %oi.ref: %Inner = name_ref oi, %oi
+// CHECK:STDOUT:   %n.ref: %Inner.elem = name_ref n, @Inner.%.loc13_10 [template = @Inner.%.loc13_10]
+// CHECK:STDOUT:   %.loc18_12.1: ref %i32 = class_element_access %oi.ref, element0
+// CHECK:STDOUT:   %.loc18_12.2: %i32 = bind_value %.loc18_12.1
+// CHECK:STDOUT:   return %.loc18_12.2
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
-// CHECK:STDOUT: fn @G(%o: Outer) {
+// CHECK:STDOUT: fn @G(%o.param_patt: %Outer) {
 // CHECK:STDOUT: !entry:
-// CHECK:STDOUT:   %o.ref: Outer = name_ref o, %o
-// CHECK:STDOUT:   %Inner.ref: type = name_ref Inner, @Outer.%Inner.decl [template = constants.%Inner]
-// CHECK:STDOUT:   %i.var: ref Inner = var i
-// CHECK:STDOUT:   %i: ref Inner = bind_name i, %i.var
+// CHECK:STDOUT:   name_binding_decl {
+// CHECK:STDOUT:     %i.patt: %Inner = binding_pattern i
+// CHECK:STDOUT:     %.loc22_3: %Inner = var_pattern %i.patt
+// CHECK:STDOUT:   }
+// CHECK:STDOUT:   %i.var: ref %Inner = var i
+// CHECK:STDOUT:   %.loc22_11: type = splice_block %Inner.ref [template = constants.%Inner] {
+// CHECK:STDOUT:     %o.ref: %Outer = name_ref o, %o
+// CHECK:STDOUT:     %Inner.ref: type = name_ref Inner, @Outer.%Inner.decl [template = constants.%Inner]
+// CHECK:STDOUT:   }
+// CHECK:STDOUT:   %i: ref %Inner = bind_name i, %i.var
 // CHECK:STDOUT:   return
 // CHECK:STDOUT: }
 // CHECK:STDOUT:

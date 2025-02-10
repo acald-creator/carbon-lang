@@ -6,23 +6,29 @@
 
 #include <fstream>
 
+#include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
 #include "common/check.h"
 #include "common/ostream.h"
+#include "common/raw_string_ostream.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/FormatVariadic.h"
 
 namespace Carbon::Testing {
 
-// Converts a matched line number to an int, trimming whitespace.
+// Converts a matched line number to an int, trimming whitespace. Returns 0 if
+// there is no line number, to assist early placement.
 static auto ParseLineNumber(absl::string_view matched_line_number) -> int {
   llvm::StringRef trimmed = matched_line_number;
   trimmed = trimmed.trim();
+  if (trimmed.empty()) {
+    return 0;
+  }
   // NOLINTNEXTLINE(google-runtime-int): API requirement.
   long long val;
-  CARBON_CHECK(!llvm::getAsSignedInteger(trimmed, 10, val))
-      << matched_line_number;
+  CARBON_CHECK(!llvm::getAsSignedInteger(trimmed, 10, val), "{0}",
+               matched_line_number);
   return val;
 }
 
@@ -41,7 +47,6 @@ auto FileTestAutoupdater::CheckLine::RemapLineNumbers(
     return;
   }
 
-  bool found_one = false;
   // Use a cursor for the line so that we can't keep matching the same
   // content, which may occur when we keep a literal line number.
   int line_offset = 0;
@@ -60,10 +65,8 @@ auto FileTestAutoupdater::CheckLine::RemapLineNumbers(
       RE2::PartialMatch(line_cursor, *replacement_->re, &matched_line_number);
     }
     if (matched_line_number.empty()) {
-      CARBON_CHECK(found_one) << line_;
       return;
     }
-    found_one = true;
 
     // Update the cursor offset from the match.
     line_offset = matched_line_number.begin() - line_.c_str();
@@ -103,7 +106,7 @@ auto FileTestAutoupdater::CheckLine::RemapLineNumbers(
 }
 
 auto FileTestAutoupdater::GetFileAndLineNumber(
-    llvm::DenseMap<llvm::StringRef, int> file_to_number_map,
+    const llvm::DenseMap<llvm::StringRef, int>& file_to_number_map,
     int default_file_number, const std::string& check_line)
     -> FileAndLineNumber {
   for (const auto& replacement : line_number_replacements_) {
@@ -156,22 +159,34 @@ auto FileTestAutoupdater::BuildCheckLines(llvm::StringRef output,
     lines.pop_back();
   }
 
-  // `{{` and `[[` are escaped as a regex matcher.
-  RE2 double_brace_re(R"(\{\{)");
-  RE2 double_square_bracket_re(R"(\[\[)");
-  // End-of-line whitespace is replaced with a regex matcher to make it visible.
-  RE2 end_of_line_whitespace_re(R"((\s+)$)");
-
   // The default file number for when no specific file is found.
   int default_file_number = 0;
 
   llvm::SmallVector<CheckLine> check_lines;
   for (const auto& line : lines) {
-    std::string check_line = llvm::formatv("// CHECK:{0}:{1}{2}", label,
-                                           line.empty() ? "" : " ", line);
-    RE2::Replace(&check_line, double_brace_re, R"({{\\{\\{}})");
-    RE2::Replace(&check_line, double_square_bracket_re, R"({{\\[\\[}})");
-    RE2::Replace(&check_line, end_of_line_whitespace_re, R"({{\1}})");
+    // This code is relatively hot in our testing, and because when testing it
+    // isn't run with an optimizer we benefit from making it use simple
+    // constructs. For this reason, we avoid `llvm::formatv` and similar tools.
+    std::string check_line;
+    check_line.reserve(line.size() + strlen(label) + strlen("// CHECK:: "));
+    check_line.append("// CHECK:");
+    check_line.append(label);
+    check_line.append(":");
+    if (!line.empty()) {
+      check_line.append(" ");
+      check_line.append(line);
+    }
+
+    // \r and \t are invisible characters worth marking.
+    // {{ and [[ are autoupdate syntax which we need to escape.
+    check_line = absl::StrReplaceAll(check_line, {{"\r", R"({{\r}})"},
+                                                  {"\t", R"({{\t}})"},
+                                                  {"{{", R"({{\{\{}})"},
+                                                  {"[[", R"({{\[\[}})"}});
+    // Add an empty regex to call out end-of-line whitespace.
+    if (check_line.ends_with(' ')) {
+      check_line.append("{{}}");
+    }
 
     // Ignore TEST_TMPDIR in output.
     if (auto pos = check_line.find(tmpdir); pos != std::string::npos) {
@@ -184,9 +199,9 @@ auto FileTestAutoupdater::BuildCheckLines(llvm::StringRef output,
       absl::string_view filename;
       if (RE2::PartialMatch(line, *default_file_re_, &filename)) {
         auto it = file_to_number_map.find(filename);
-        CARBON_CHECK(it != file_to_number_map.end())
-            << "default_file_re had unexpected match in '" << line << "' (`"
-            << default_file_re_->pattern() << "`)";
+        CARBON_CHECK(it != file_to_number_map.end(),
+                     "default_file_re had unexpected match in '{0}' (`{1}`)",
+                     line, default_file_re_->pattern());
         default_file_number = it->second;
       }
     }
@@ -206,9 +221,25 @@ auto FileTestAutoupdater::AddRemappedNonCheckLine() -> void {
                    .second);
 }
 
+auto FileTestAutoupdater::AddTips() -> void {
+  CARBON_CHECK(tips_.empty(), "Should only add tips once");
+
+  tips_.reserve(4);
+  // This puts commands on a single line so that they can be easily copied.
+  tips_.emplace_back("// TIP: To test this file alone, run:");
+  tips_.emplace_back("// TIP:   " + test_command_);
+  tips_.emplace_back("// TIP: To dump output, run:");
+  tips_.emplace_back("// TIP:   " + dump_command_);
+
+  for (const auto& tip : tips_) {
+    new_lines_.push_back(&tip);
+    ++output_line_number_;
+  }
+}
+
 auto FileTestAutoupdater::ShouldAddCheckLine(const CheckLines& check_lines,
                                              bool to_file_end) const -> bool {
-  return check_lines.cursor != check_lines.lines.end() &&
+  return !autoupdate_split_ && check_lines.cursor != check_lines.lines.end() &&
          (check_lines.cursor->file_number() < output_file_number_ ||
           (check_lines.cursor->file_number() == output_file_number_ &&
            (to_file_end || check_lines.cursor->line_number() <=
@@ -251,12 +282,12 @@ auto FileTestAutoupdater::StartSplitFile() -> void {
   // Advance the file.
   ++output_file_number_;
   output_line_number_ = 0;
-  CARBON_CHECK(output_file_number_ == non_check_line_->file_number())
-      << "Non-sequential file: " << non_check_line_->file_number();
+  CARBON_CHECK(output_file_number_ == non_check_line_->file_number(),
+               "Non-sequential file: {0}", non_check_line_->file_number());
 
   // Each following file has precisely one split line.
-  CARBON_CHECK(non_check_line_->line_number() < 1)
-      << "Expected a split line, got " << *non_check_line_;
+  CARBON_CHECK(non_check_line_->line_number() < 1,
+               "Expected a split line, got {0}", *non_check_line_);
   // The split line is ignored when calculating line counts.
   new_lines_.push_back(non_check_line_);
 
@@ -273,8 +304,8 @@ auto FileTestAutoupdater::Run(bool dry_run) -> bool {
   // Print everything until the autoupdate line.
   while (non_check_line_->line_number() != autoupdate_line_number_) {
     CARBON_CHECK(non_check_line_ != non_check_lines_.end() &&
-                 non_check_line_->file_number() == 0)
-        << "Missed autoupdate?";
+                     non_check_line_->file_number() == 0,
+                 "Missed autoupdate?");
     AddRemappedNonCheckLine();
     ++non_check_line_;
   }
@@ -284,9 +315,12 @@ auto FileTestAutoupdater::Run(bool dry_run) -> bool {
   // we don't insert a blank line before the STDERR checks if there are no more
   // lines after AUTOUPDATE.
   AddRemappedNonCheckLine();
-  AddCheckLines(stderr_, /*to_file_end=*/false);
-  if (any_attached_stdout_lines_) {
-    AddCheckLines(stdout_, /*to_file_end=*/false);
+  AddTips();
+  if (!autoupdate_split_) {
+    AddCheckLines(stderr_, /*to_file_end=*/false);
+    if (any_attached_stdout_lines_) {
+      AddCheckLines(stdout_, /*to_file_end=*/false);
+    }
   }
   ++non_check_line_;
 
@@ -295,6 +329,10 @@ auto FileTestAutoupdater::Run(bool dry_run) -> bool {
     if (output_file_number_ < non_check_line_->file_number()) {
       FinishFile(/*is_last_file=*/false);
       StartSplitFile();
+      if (autoupdate_split_ &&
+          output_file_number_ == static_cast<int>(filenames_.size())) {
+        break;
+      }
       continue;
     }
 
@@ -313,6 +351,11 @@ auto FileTestAutoupdater::Run(bool dry_run) -> bool {
     ++non_check_line_;
   }
 
+  // When autoupdate_split_ was true, this will result in all check lines (and
+  // only check lines) being added to the split by FinishFile. We don't use
+  // autoupdate_split_ past this point.
+  autoupdate_split_ = false;
+
   FinishFile(/*is_last_file=*/true);
 
   for (auto& check_line : stdout_.lines) {
@@ -323,11 +366,11 @@ auto FileTestAutoupdater::Run(bool dry_run) -> bool {
   }
 
   // Generate the autoupdated file.
-  std::string new_content;
-  llvm::raw_string_ostream new_content_stream(new_content);
+  RawStringOstream new_content_stream;
   for (const auto& line : new_lines_) {
     new_content_stream << *line << '\n';
   }
+  std::string new_content = new_content_stream.TakeStr();
 
   // Update the file on disk if needed.
   if (new_content == input_content_) {

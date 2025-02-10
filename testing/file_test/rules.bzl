@@ -9,34 +9,7 @@ a file which can be accessed as a list. This avoids long argument parsing.
 """
 
 load("@rules_cc//cc:defs.bzl", "cc_test")
-
-DataFilesInfo = provider(
-    "Data files for this target.",
-    fields = {
-        "data_files": "Data files for this target",
-    },
-)
-
-def _tests_as_input_file_rule_impl(ctx):
-    data_files = []
-    for tests in ctx.attr.data:
-        data_files.extend(
-            [f.path for f in tests[DefaultInfo].data_runfiles.files.to_list()],
-        )
-        data_files.extend(
-            [f.path for f in tests[DefaultInfo].files.to_list()],
-        )
-    ctx.actions.write(ctx.outputs.data_files, "\n".join(data_files) + "\n")
-
-_tests_as_input_file_rule = rule(
-    attrs = {
-        "data": attr.label_list(allow_files = True),
-    },
-    outputs = {
-        "data_files": "%{name}.txt",
-    },
-    implementation = _tests_as_input_file_rule_impl,
-)
+load("//bazel/manifest:defs.bzl", "manifest")
 
 def file_test(
         name,
@@ -63,13 +36,13 @@ def file_test(
 
     # Ensure tests are always a filegroup for tests_as_input_file_rule.
     tests_file = "{0}.tests".format(name)
-    _tests_as_input_file_rule(
+    manifest(
         name = tests_file,
-        data = tests,
+        srcs = tests,
         testonly = 1,
     )
     args = ["--test_targets_file=$(rootpath :{0})".format(tests_file)] + args
-    data = [tests_file] + tests + data
+    data = [":" + tests_file] + tests + data
 
     if prebuilt_binary:
         native.sh_test(

@@ -3,10 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/packages/import/fail_extra_string.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/packages/import/fail_extra_string.carbon
 
-// CHECK:STDERR: fail_extra_string.carbon:[[@LINE+3]]:26: ERROR: `import` declarations must end with a `;`.
+// CHECK:STDERR: fail_extra_string.carbon:[[@LINE+4]]:26: error: `import` declarations must end with a `;` [ExpectedDeclSemi]
 // CHECK:STDERR: import Foo library "bar" "baz";
 // CHECK:STDERR:                          ^~~~~
+// CHECK:STDERR:
 import Foo library "bar" "baz";
 
 // CHECK:STDOUT: - filename: fail_extra_string.carbon
@@ -16,6 +21,6 @@ import Foo library "bar" "baz";
 // CHECK:STDOUT:       {kind: 'PackageName', text: 'Foo'},
 // CHECK:STDOUT:         {kind: 'LibraryName', text: '"bar"'},
 // CHECK:STDOUT:       {kind: 'LibrarySpecifier', text: 'library', subtree_size: 2},
-// CHECK:STDOUT:     {kind: 'ImportDirective', text: ';', has_error: yes, subtree_size: 5},
+// CHECK:STDOUT:     {kind: 'ImportDecl', text: ';', has_error: yes, subtree_size: 5},
 // CHECK:STDOUT:     {kind: 'FileEnd', text: ''},
 // CHECK:STDOUT:   ]

@@ -3,38 +3,35 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/check/testdata/class/fail_addr_self.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/check/testdata/class/fail_addr_self.carbon
 
 class Class {
   fn F[addr self: Class*]();
+  // CHECK:STDERR: fail_addr_self.carbon:[[@LINE+4]]:8: error: `addr` can only be applied to a binding with a pointer type [AddrOnNonPointerType]
+  // CHECK:STDERR:   fn G[addr self: Class]();
+  // CHECK:STDERR:        ^~~~~~~~~~~~~~~~
+  // CHECK:STDERR:
   fn G[addr self: Class]();
 }
 
 fn F(c: Class, p: Class*) {
-  // CHECK:STDERR: fail_addr_self.carbon:[[@LINE+6]]:6: ERROR: `addr self` method cannot be invoked on a value.
+  // CHECK:STDERR: fail_addr_self.carbon:[[@LINE+7]]:3: error: `addr self` method cannot be invoked on a value [AddrSelfIsNonRef]
   // CHECK:STDERR:   c.F();
-  // CHECK:STDERR:      ^
-  // CHECK:STDERR: fail_addr_self.carbon:[[@LINE-8]]:13: Initializing `addr self` parameter of method declared here.
+  // CHECK:STDERR:   ^
+  // CHECK:STDERR: fail_addr_self.carbon:[[@LINE-12]]:8: note: initializing function parameter [InCallToFunctionParam]
   // CHECK:STDERR:   fn F[addr self: Class*]();
-  // CHECK:STDERR:             ^~~~
+  // CHECK:STDERR:        ^~~~~~~~~~~~~~~~~
+  // CHECK:STDERR:
   c.F();
 
-  // CHECK:STDERR: fail_addr_self.carbon:[[@LINE+6]]:6: ERROR: `addr self` method cannot be invoked on a value.
-  // CHECK:STDERR:   c.G();
-  // CHECK:STDERR:      ^
-  // CHECK:STDERR: fail_addr_self.carbon:[[@LINE-15]]:13: Initializing `addr self` parameter of method declared here.
-  // CHECK:STDERR:   fn G[addr self: Class]();
-  // CHECK:STDERR:             ^~~~
   c.G();
 
   // This call is OK.
   (*p).F();
 
-  // CHECK:STDERR: fail_addr_self.carbon:[[@LINE+6]]:3: ERROR: Cannot implicitly convert from `Class*` to `Class`.
-  // CHECK:STDERR:   (*p).G();
-  // CHECK:STDERR:   ^~~~~~~
-  // CHECK:STDERR: fail_addr_self.carbon:[[@LINE-26]]:13: Initializing `addr self` parameter of method declared here.
-  // CHECK:STDERR:   fn G[addr self: Class]();
-  // CHECK:STDERR:             ^~~~
   (*p).G();
 }
 
@@ -42,72 +39,107 @@ fn F(c: Class, p: Class*) {
 // CHECK:STDOUT:
 // CHECK:STDOUT: constants {
 // CHECK:STDOUT:   %Class: type = class_type @Class [template]
-// CHECK:STDOUT:   %.1: type = ptr_type Class [template]
-// CHECK:STDOUT:   %.2: type = struct_type {} [template]
-// CHECK:STDOUT:   %.3: type = tuple_type () [template]
-// CHECK:STDOUT:   %.4: type = ptr_type {} [template]
+// CHECK:STDOUT:   %ptr.e71: type = ptr_type %Class [template]
+// CHECK:STDOUT:   %F.type.f1b: type = fn_type @F.1 [template]
+// CHECK:STDOUT:   %empty_tuple.type: type = tuple_type () [template]
+// CHECK:STDOUT:   %F.1f2: %F.type.f1b = struct_value () [template]
+// CHECK:STDOUT:   %G.type: type = fn_type @G [template]
+// CHECK:STDOUT:   %G: %G.type = struct_value () [template]
+// CHECK:STDOUT:   %empty_struct_type: type = struct_type {} [template]
+// CHECK:STDOUT:   %complete_type: <witness> = complete_type_witness %empty_struct_type [template]
+// CHECK:STDOUT:   %F.type.b25: type = fn_type @F.2 [template]
+// CHECK:STDOUT:   %F.c41: %F.type.b25 = struct_value () [template]
+// CHECK:STDOUT: }
+// CHECK:STDOUT:
+// CHECK:STDOUT: imports {
+// CHECK:STDOUT:   %Core: <namespace> = namespace file.%Core.import, [template] {
+// CHECK:STDOUT:     import Core//prelude
+// CHECK:STDOUT:     import Core//prelude/...
+// CHECK:STDOUT:   }
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: file {
 // CHECK:STDOUT:   package: <namespace> = namespace [template] {
+// CHECK:STDOUT:     .Core = imports.%Core
 // CHECK:STDOUT:     .Class = %Class.decl
-// CHECK:STDOUT:     .F = %F
+// CHECK:STDOUT:     .F = %F.decl
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %Class.decl: type = class_decl @Class [template = constants.%Class] {}
-// CHECK:STDOUT:   %F: <function> = fn_decl @F.2 [template] {
-// CHECK:STDOUT:     %Class.ref.loc12_9: type = name_ref Class, %Class.decl [template = constants.%Class]
-// CHECK:STDOUT:     %c.loc12_6.1: Class = param c
-// CHECK:STDOUT:     @F.2.%c: Class = bind_name c, %c.loc12_6.1
-// CHECK:STDOUT:     %Class.ref.loc12_19: type = name_ref Class, %Class.decl [template = constants.%Class]
-// CHECK:STDOUT:     %.loc12: type = ptr_type Class [template = constants.%.1]
-// CHECK:STDOUT:     %p.loc12_16.1: Class* = param p
-// CHECK:STDOUT:     @F.2.%p: Class* = bind_name p, %p.loc12_16.1
+// CHECK:STDOUT:   %Core.import = import Core
+// CHECK:STDOUT:   %Class.decl: type = class_decl @Class [template = constants.%Class] {} {}
+// CHECK:STDOUT:   %F.decl: %F.type.b25 = fn_decl @F.2 [template = constants.%F.c41] {
+// CHECK:STDOUT:     %c.patt: %Class = binding_pattern c
+// CHECK:STDOUT:     %c.param_patt: %Class = value_param_pattern %c.patt, runtime_param0
+// CHECK:STDOUT:     %p.patt: %ptr.e71 = binding_pattern p
+// CHECK:STDOUT:     %p.param_patt: %ptr.e71 = value_param_pattern %p.patt, runtime_param1
+// CHECK:STDOUT:   } {
+// CHECK:STDOUT:     %c.param: %Class = value_param runtime_param0
+// CHECK:STDOUT:     %Class.ref.loc20_9: type = name_ref Class, file.%Class.decl [template = constants.%Class]
+// CHECK:STDOUT:     %c: %Class = bind_name c, %c.param
+// CHECK:STDOUT:     %p.param: %ptr.e71 = value_param runtime_param1
+// CHECK:STDOUT:     %.loc20: type = splice_block %ptr [template = constants.%ptr.e71] {
+// CHECK:STDOUT:       %Class.ref.loc20_19: type = name_ref Class, file.%Class.decl [template = constants.%Class]
+// CHECK:STDOUT:       %ptr: type = ptr_type %Class [template = constants.%ptr.e71]
+// CHECK:STDOUT:     }
+// CHECK:STDOUT:     %p: %ptr.e71 = bind_name p, %p.param
 // CHECK:STDOUT:   }
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: class @Class {
-// CHECK:STDOUT:   %F: <function> = fn_decl @F.1 [template] {
-// CHECK:STDOUT:     %Class.ref.loc8: type = name_ref Class, file.%Class.decl [template = constants.%Class]
-// CHECK:STDOUT:     %.loc8_24: type = ptr_type Class [template = constants.%.1]
-// CHECK:STDOUT:     %self.loc8_13.1: Class* = param self
-// CHECK:STDOUT:     %self.loc8_13.3: Class* = bind_name self, %self.loc8_13.1
-// CHECK:STDOUT:     %.loc8_8: Class* = addr_pattern %self.loc8_13.3
+// CHECK:STDOUT:   %F.decl: %F.type.f1b = fn_decl @F.1 [template = constants.%F.1f2] {
+// CHECK:STDOUT:     %self.patt: %ptr.e71 = binding_pattern self
+// CHECK:STDOUT:     %self.param_patt: %ptr.e71 = value_param_pattern %self.patt, runtime_param0
+// CHECK:STDOUT:     %.loc12_8: auto = addr_pattern %self.param_patt
+// CHECK:STDOUT:   } {
+// CHECK:STDOUT:     %self.param: %ptr.e71 = value_param runtime_param0
+// CHECK:STDOUT:     %.loc12_24: type = splice_block %ptr [template = constants.%ptr.e71] {
+// CHECK:STDOUT:       %Class.ref: type = name_ref Class, file.%Class.decl [template = constants.%Class]
+// CHECK:STDOUT:       %ptr: type = ptr_type %Class [template = constants.%ptr.e71]
+// CHECK:STDOUT:     }
+// CHECK:STDOUT:     %self: %ptr.e71 = bind_name self, %self.param
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %G: <function> = fn_decl @G [template] {
-// CHECK:STDOUT:     %Class.ref.loc9: type = name_ref Class, file.%Class.decl [template = constants.%Class]
-// CHECK:STDOUT:     %self.loc9_13.1: Class = param self
-// CHECK:STDOUT:     %self.loc9_13.3: Class = bind_name self, %self.loc9_13.1
-// CHECK:STDOUT:     %.loc9: Class = addr_pattern %self.loc9_13.3
+// CHECK:STDOUT:   %G.decl: %G.type = fn_decl @G [template = constants.%G] {
+// CHECK:STDOUT:     %self.patt: %Class = binding_pattern self
+// CHECK:STDOUT:     %self.param_patt: %Class = value_param_pattern %self.patt, runtime_param0
+// CHECK:STDOUT:   } {
+// CHECK:STDOUT:     %self.param: %Class = value_param runtime_param0
+// CHECK:STDOUT:     %Class.ref: type = name_ref Class, file.%Class.decl [template = constants.%Class]
+// CHECK:STDOUT:     %self: %Class = bind_name self, %self.param
 // CHECK:STDOUT:   }
+// CHECK:STDOUT:   %complete_type: <witness> = complete_type_witness %empty_struct_type [template = constants.%complete_type]
+// CHECK:STDOUT:   complete_type_witness = %complete_type
 // CHECK:STDOUT:
 // CHECK:STDOUT: !members:
 // CHECK:STDOUT:   .Self = constants.%Class
-// CHECK:STDOUT:   .F = %F
-// CHECK:STDOUT:   .G = %G
+// CHECK:STDOUT:   .F = %F.decl
+// CHECK:STDOUT:   .G = %G.decl
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
-// CHECK:STDOUT: fn @F.1[addr @Class.%self.loc8_13.3: Class*]();
+// CHECK:STDOUT: fn @F.1[addr %self.param_patt: %ptr.e71]();
 // CHECK:STDOUT:
-// CHECK:STDOUT: fn @G[addr @Class.%self.loc9_13.3: Class]();
+// CHECK:STDOUT: fn @G[%self.param_patt: %Class]();
 // CHECK:STDOUT:
-// CHECK:STDOUT: fn @F.2(%c: Class, %p: Class*) {
+// CHECK:STDOUT: fn @F.2(%c.param_patt: %Class, %p.param_patt: %ptr.e71) {
 // CHECK:STDOUT: !entry:
-// CHECK:STDOUT:   %c.ref.loc19: Class = name_ref c, %c
-// CHECK:STDOUT:   %.loc19_4: <bound method> = bound_method %c.ref.loc19, @Class.%F
-// CHECK:STDOUT:   %.loc19_6: init () = call %.loc19_4(<invalid>)
-// CHECK:STDOUT:   %c.ref.loc27: Class = name_ref c, %c
-// CHECK:STDOUT:   %.loc27_4: <bound method> = bound_method %c.ref.loc27, @Class.%G
-// CHECK:STDOUT:   %.loc27_6: init () = call %.loc27_4(<invalid>)
-// CHECK:STDOUT:   %p.ref.loc30: Class* = name_ref p, %p
-// CHECK:STDOUT:   %.loc30_4.1: ref Class = deref %p.ref.loc30
-// CHECK:STDOUT:   %.loc30_7: <bound method> = bound_method %.loc30_4.1, @Class.%F
-// CHECK:STDOUT:   %.loc30_4.2: Class* = addr_of %.loc30_4.1
-// CHECK:STDOUT:   %.loc30_9: init () = call %.loc30_7(%.loc30_4.2)
-// CHECK:STDOUT:   %p.ref.loc38: Class* = name_ref p, %p
-// CHECK:STDOUT:   %.loc38_4.1: ref Class = deref %p.ref.loc38
-// CHECK:STDOUT:   %.loc38_7: <bound method> = bound_method %.loc38_4.1, @Class.%G
-// CHECK:STDOUT:   %.loc38_4.2: Class* = addr_of %.loc38_4.1
-// CHECK:STDOUT:   %.loc38_9: init () = call %.loc38_7(<invalid>)
+// CHECK:STDOUT:   %c.ref.loc28: %Class = name_ref c, %c
+// CHECK:STDOUT:   %F.ref.loc28: %F.type.f1b = name_ref F, @Class.%F.decl [template = constants.%F.1f2]
+// CHECK:STDOUT:   %F.bound.loc28: <bound method> = bound_method %c.ref.loc28, %F.ref.loc28
+// CHECK:STDOUT:   %F.call.loc28: init %empty_tuple.type = call %F.bound.loc28(<error>)
+// CHECK:STDOUT:   %c.ref.loc30: %Class = name_ref c, %c
+// CHECK:STDOUT:   %G.ref.loc30: %G.type = name_ref G, @Class.%G.decl [template = constants.%G]
+// CHECK:STDOUT:   %G.bound.loc30: <bound method> = bound_method %c.ref.loc30, %G.ref.loc30
+// CHECK:STDOUT:   %G.call.loc30: init %empty_tuple.type = call %G.bound.loc30(%c.ref.loc30)
+// CHECK:STDOUT:   %p.ref.loc33: %ptr.e71 = name_ref p, %p
+// CHECK:STDOUT:   %.loc33: ref %Class = deref %p.ref.loc33
+// CHECK:STDOUT:   %F.ref.loc33: %F.type.f1b = name_ref F, @Class.%F.decl [template = constants.%F.1f2]
+// CHECK:STDOUT:   %F.bound.loc33: <bound method> = bound_method %.loc33, %F.ref.loc33
+// CHECK:STDOUT:   %addr: %ptr.e71 = addr_of %.loc33
+// CHECK:STDOUT:   %F.call.loc33: init %empty_tuple.type = call %F.bound.loc33(%addr)
+// CHECK:STDOUT:   %p.ref.loc35: %ptr.e71 = name_ref p, %p
+// CHECK:STDOUT:   %.loc35_4.1: ref %Class = deref %p.ref.loc35
+// CHECK:STDOUT:   %G.ref.loc35: %G.type = name_ref G, @Class.%G.decl [template = constants.%G]
+// CHECK:STDOUT:   %G.bound.loc35: <bound method> = bound_method %.loc35_4.1, %G.ref.loc35
+// CHECK:STDOUT:   %.loc35_4.2: %Class = bind_value %.loc35_4.1
+// CHECK:STDOUT:   %G.call.loc35: init %empty_tuple.type = call %G.bound.loc35(%.loc35_4.2)
 // CHECK:STDOUT:   return
 // CHECK:STDOUT: }
 // CHECK:STDOUT:

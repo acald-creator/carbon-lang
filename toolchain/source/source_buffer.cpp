@@ -7,16 +7,9 @@
 #include <limits>
 
 #include "llvm/Support/ErrorOr.h"
+#include "toolchain/diagnostics/file_diagnostics.h"
 
 namespace Carbon {
-
-namespace {
-struct FilenameTranslator : DiagnosticLocationTranslator<llvm::StringRef> {
-  auto GetLocation(llvm::StringRef filename) -> DiagnosticLocation override {
-    return {.file_name = filename};
-  }
-};
-}  // namespace
 
 auto SourceBuffer::MakeFromStdin(DiagnosticConsumer& consumer)
     -> std::optional<SourceBuffer> {
@@ -28,21 +21,20 @@ auto SourceBuffer::MakeFromFile(llvm::vfs::FileSystem& fs,
                                 llvm::StringRef filename,
                                 DiagnosticConsumer& consumer)
     -> std::optional<SourceBuffer> {
-  FilenameTranslator translator;
-  DiagnosticEmitter<llvm::StringRef> emitter(translator, consumer);
+  FileDiagnosticEmitter emitter(&consumer);
 
   llvm::ErrorOr<std::unique_ptr<llvm::vfs::File>> file =
       fs.openFileForRead(filename);
   if (file.getError()) {
     CARBON_DIAGNOSTIC(ErrorOpeningFile, Error,
-                      "Error opening file for read: {0}", std::string);
+                      "error opening file for read: {0}", std::string);
     emitter.Emit(filename, ErrorOpeningFile, file.getError().message());
     return std::nullopt;
   }
 
   llvm::ErrorOr<llvm::vfs::Status> status = (*file)->status();
   if (status.getError()) {
-    CARBON_DIAGNOSTIC(ErrorStattingFile, Error, "Error statting file: {0}",
+    CARBON_DIAGNOSTIC(ErrorStattingFile, Error, "error statting file: {0}",
                       std::string);
     emitter.Emit(filename, ErrorStattingFile, file.getError().message());
     return std::nullopt;
@@ -59,15 +51,23 @@ auto SourceBuffer::MakeFromFile(llvm::vfs::FileSystem& fs,
       filename, is_regular_file, consumer);
 }
 
+auto SourceBuffer::MakeFromStringCopy(llvm::StringRef filename,
+                                      llvm::StringRef text,
+                                      DiagnosticConsumer& consumer)
+    -> std::optional<SourceBuffer> {
+  return MakeFromMemoryBuffer(
+      llvm::MemoryBuffer::getMemBufferCopy(text, filename), filename,
+      /*is_regular_file=*/true, consumer);
+}
+
 auto SourceBuffer::MakeFromMemoryBuffer(
     llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> buffer,
     llvm::StringRef filename, bool is_regular_file,
     DiagnosticConsumer& consumer) -> std::optional<SourceBuffer> {
-  FilenameTranslator translator;
-  DiagnosticEmitter<llvm::StringRef> emitter(translator, consumer);
+  FileDiagnosticEmitter emitter(&consumer);
 
   if (buffer.getError()) {
-    CARBON_DIAGNOSTIC(ErrorReadingFile, Error, "Error reading file: {0}",
+    CARBON_DIAGNOSTIC(ErrorReadingFile, Error, "error reading file: {0}",
                       std::string);
     emitter.Emit(filename, ErrorReadingFile, buffer.getError().message());
     return std::nullopt;
@@ -75,7 +75,7 @@ auto SourceBuffer::MakeFromMemoryBuffer(
 
   if (buffer.get()->getBufferSize() >= std::numeric_limits<int32_t>::max()) {
     CARBON_DIAGNOSTIC(FileTooLarge, Error,
-                      "File is over the 2GiB input limit; size is {0} bytes.",
+                      "file is over the 2GiB input limit; size is {0} bytes",
                       int64_t);
     emitter.Emit(filename, FileTooLarge, buffer.get()->getBufferSize());
     return std::nullopt;

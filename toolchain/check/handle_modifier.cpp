@@ -3,17 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/check/context.h"
-#include "toolchain/check/decl_state.h"
+#include "toolchain/check/decl_introducer_state.h"
+#include "toolchain/check/handle.h"
 #include "toolchain/lex/token_kind.h"
 
 namespace Carbon::Check {
 
-CARBON_DIAGNOSTIC(ModifierPrevious, Note, "`{0}` previously appeared here.",
+CARBON_DIAGNOSTIC(ModifierPrevious, Note, "`{0}` previously appeared here",
                   Lex::TokenKind);
 
-static auto EmitRepeatedDiagnostic(Context& context, Parse::NodeId first_node,
-                                   Parse::NodeId second_node) -> void {
-  CARBON_DIAGNOSTIC(ModifierRepeated, Error, "`{0}` repeated on declaration.",
+static auto DiagnoseRepeated(Context& context, Parse::NodeId first_node,
+                             Parse::NodeId second_node) -> void {
+  CARBON_DIAGNOSTIC(ModifierRepeated, Error, "`{0}` repeated on declaration",
                     Lex::TokenKind);
   context.emitter()
       .Build(second_node, ModifierRepeated, context.token_kind(second_node))
@@ -21,11 +22,10 @@ static auto EmitRepeatedDiagnostic(Context& context, Parse::NodeId first_node,
       .Emit();
 }
 
-static auto EmitNotAllowedWithDiagnostic(Context& context,
-                                         Parse::NodeId first_node,
-                                         Parse::NodeId second_node) -> void {
+static auto DiagnoseNotAllowedWith(Context& context, Parse::NodeId first_node,
+                                   Parse::NodeId second_node) -> void {
   CARBON_DIAGNOSTIC(ModifierNotAllowedWith, Error,
-                    "`{0}` not allowed on declaration with `{1}`.",
+                    "`{0}` not allowed on declaration with `{1}`",
                     Lex::TokenKind, Lex::TokenKind);
   context.emitter()
       .Build(second_node, ModifierNotAllowedWith,
@@ -34,39 +34,94 @@ static auto EmitNotAllowedWithDiagnostic(Context& context,
       .Emit();
 }
 
-static auto HandleModifier(Context& context, Parse::NodeId parse_node,
+// Handles the keyword that starts a modifier. This may a standalone keyword,
+// such as `private`, or the first in a complex modifier, such as `extern` in
+// `extern library ...`. If valid, adds it to the modifier set and returns true.
+// Otherwise, diagnoses and returns false.
+static auto HandleModifier(Context& context, Parse::NodeId node_id,
                            KeywordModifierSet keyword) -> bool {
-  auto& s = context.decl_state_stack().innermost();
-  bool is_access = !!(keyword & KeywordModifierSet::Access);
-  auto& saw_modifier = is_access ? s.saw_access_modifier : s.saw_decl_modifier;
-  if (!!(s.modifier_set & keyword)) {
-    EmitRepeatedDiagnostic(context, saw_modifier, parse_node);
-  } else if (saw_modifier.is_valid()) {
-    EmitNotAllowedWithDiagnostic(context, saw_modifier, parse_node);
-  } else if (is_access && s.saw_decl_modifier.is_valid()) {
+  auto& s = context.decl_introducer_state_stack().innermost();
+
+  ModifierOrder order;
+  KeywordModifierSet later_modifiers;
+  if (keyword.HasAnyOf(KeywordModifierSet::Access)) {
+    order = ModifierOrder::Access;
+    later_modifiers = KeywordModifierSet::Extern | KeywordModifierSet::Decl;
+  } else if (keyword.HasAnyOf(KeywordModifierSet::Extern)) {
+    order = ModifierOrder::Extern;
+    later_modifiers = KeywordModifierSet::Decl;
+  } else {
+    order = ModifierOrder::Decl;
+    later_modifiers = KeywordModifierSet::None;
+  }
+
+  auto current_modifier_node_id = s.modifier_node_id(order);
+  if (s.modifier_set.HasAnyOf(keyword)) {
+    DiagnoseRepeated(context, current_modifier_node_id, node_id);
+    return false;
+  }
+  if (current_modifier_node_id.has_value()) {
+    DiagnoseNotAllowedWith(context, current_modifier_node_id, node_id);
+    return false;
+  }
+  if (auto later_modifier_set = s.modifier_set & later_modifiers;
+      !later_modifier_set.empty()) {
+    // At least one later modifier is present. Diagnose using the closest.
+    Parse::NodeId closest_later_modifier = Parse::NodeId::None;
+    for (auto later_order = static_cast<int8_t>(order) + 1;
+         later_order <= static_cast<int8_t>(ModifierOrder::Last);
+         ++later_order) {
+      if (s.ordered_modifier_node_ids[later_order].has_value()) {
+        closest_later_modifier = s.ordered_modifier_node_ids[later_order];
+        break;
+      }
+    }
+    CARBON_CHECK(closest_later_modifier.has_value());
+
     CARBON_DIAGNOSTIC(ModifierMustAppearBefore, Error,
-                      "`{0}` must appear before `{1}`.", Lex::TokenKind,
+                      "`{0}` must appear before `{1}`", Lex::TokenKind,
                       Lex::TokenKind);
     context.emitter()
-        .Build(parse_node, ModifierMustAppearBefore,
-               context.token_kind(parse_node),
-               context.token_kind(s.saw_decl_modifier))
-        .Note(s.saw_decl_modifier, ModifierPrevious,
-              context.token_kind(s.saw_decl_modifier))
+        .Build(node_id, ModifierMustAppearBefore, context.token_kind(node_id),
+               context.token_kind(closest_later_modifier))
+        .Note(closest_later_modifier, ModifierPrevious,
+              context.token_kind(closest_later_modifier))
         .Emit();
-  } else {
-    s.modifier_set |= keyword;
-    saw_modifier = parse_node;
+    return false;
   }
+
+  s.modifier_set.Add(keyword);
+  s.set_modifier_node_id(order, node_id);
   return true;
 }
 
 #define CARBON_PARSE_NODE_KIND(...)
-#define CARBON_PARSE_NODE_KIND_TOKEN_MODIFIER(Name, ...)                    \
-  auto Handle##Name##Modifier(Context& context,                             \
-                              Parse::Name##ModifierId parse_node) -> bool { \
-    return HandleModifier(context, parse_node, KeywordModifierSet::Name);   \
+#define CARBON_PARSE_NODE_KIND_TOKEN_MODIFIER(Name, ...)                  \
+  auto HandleParseNode(Context& context, Parse::Name##ModifierId node_id) \
+      -> bool {                                                           \
+    HandleModifier(context, node_id, KeywordModifierSet::Name);           \
+    return true;                                                          \
   }
 #include "toolchain/parse/node_kind.def"
+
+auto HandleParseNode(Context& context,
+                     Parse::ExternModifierWithLibraryId node_id) -> bool {
+  auto name_literal_id = context.node_stack().Pop<SemIR::LibraryNameId>();
+  if (HandleModifier(context, node_id, KeywordModifierSet::Extern)) {
+    auto& s = context.decl_introducer_state_stack().innermost();
+    s.extern_library = name_literal_id;
+  }
+  return true;
+}
+
+auto HandleParseNode(Context& context, Parse::ExternModifierId node_id)
+    -> bool {
+  return HandleModifier(context, node_id, KeywordModifierSet::Extern);
+}
+
+auto HandleParseNode(Context& context, Parse::ReturnedModifierId node_id)
+    -> bool {
+  return HandleModifier(context, node_id, KeywordModifierSet::Returned);
+}
 
 }  // namespace Carbon::Check

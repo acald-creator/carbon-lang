@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 auto HandleChoiceIntroducer(Context& context) -> void {
   auto state = context.PopState();
 
   context.PushState(state, State::ChoiceDefinitionStart);
-  context.PushState(State::DeclNameAndParamsAsOptional, state.token);
+  context.PushState(State::DeclNameAndParams, state.token);
 }
 
 auto HandleChoiceDefinitionStart(Context& context) -> void {
@@ -18,22 +19,22 @@ auto HandleChoiceDefinitionStart(Context& context) -> void {
   if (!context.PositionIs(Lex::TokenKind::OpenCurlyBrace)) {
     if (!state.has_error) {
       CARBON_DIAGNOSTIC(ExpectedChoiceDefinition, Error,
-                        "Choice definition expected.");
+                        "choice definition expected");
       context.emitter().Emit(*context.position(), ExpectedChoiceDefinition);
     }
 
     context.AddNode(NodeKind::ChoiceDefinitionStart, *context.position(),
-                    state.subtree_start, /*has_error=*/true);
+                    /*has_error=*/true);
 
     context.AddNode(NodeKind::ChoiceDefinition, *context.position(),
-                    state.subtree_start, /*has_error=*/true);
+                    /*has_error=*/true);
 
     context.SkipPastLikelyEnd(*context.position());
     return;
   }
 
   context.AddNode(NodeKind::ChoiceDefinitionStart, context.Consume(),
-                  state.subtree_start, state.has_error);
+                  state.has_error);
 
   state.has_error = false;
   state.state = State::ChoiceDefinitionFinish;
@@ -49,11 +50,11 @@ auto HandleChoiceAlternative(Context& context) -> void {
 
   context.PushState(State::ChoiceAlternativeFinish);
 
-  if (!context.ConsumeAndAddLeafNodeIf(Lex::TokenKind::Identifier,
-                                       NodeKind::IdentifierName)) {
+  auto token = context.ConsumeIf(Lex::TokenKind::Identifier);
+  if (!token) {
     if (!state.has_error) {
       CARBON_DIAGNOSTIC(ExpectedChoiceAlternativeName, Error,
-                        "Expected choice alternative name.");
+                        "expected choice alternative name");
       context.emitter().Emit(*context.position(),
                              ExpectedChoiceAlternativeName);
     }
@@ -66,7 +67,10 @@ auto HandleChoiceAlternative(Context& context) -> void {
   }
 
   if (context.PositionIs(Lex::TokenKind::OpenParen)) {
+    context.AddLeafNode(NodeKind::IdentifierNameBeforeParams, *token);
     context.PushState(State::PatternListAsTuple);
+  } else {
+    context.AddLeafNode(NodeKind::IdentifierNameNotBeforeParams, *token);
   }
 }
 
@@ -93,6 +97,6 @@ auto HandleChoiceDefinitionFinish(Context& context) -> void {
 
   context.AddNode(NodeKind::ChoiceDefinition,
                   context.ConsumeChecked(Lex::TokenKind::CloseCurlyBrace),
-                  state.subtree_start, state.has_error);
+                  state.has_error);
 }
 }  // namespace Carbon::Parse

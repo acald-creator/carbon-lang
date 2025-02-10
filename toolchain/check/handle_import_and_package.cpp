@@ -3,71 +3,84 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/check/context.h"
+#include "toolchain/check/decl_introducer_state.h"
+#include "toolchain/check/handle.h"
+#include "toolchain/check/modifiers.h"
 
 namespace Carbon::Check {
 
 // `import` and `package` are structured by parsing. As a consequence, no
 // checking logic is needed here.
 
-auto HandleImportIntroducer(Context& /*context*/,
-                            Parse::ImportIntroducerId /*parse_node*/) -> bool {
+auto HandleParseNode(Context& context, Parse::ImportIntroducerId /*node_id*/)
+    -> bool {
+  context.decl_introducer_state_stack().Push<Lex::TokenKind::Import>();
   return true;
 }
 
-auto HandleImportDirective(Context& /*context*/,
-                           Parse::ImportDirectiveId /*parse_node*/) -> bool {
+auto HandleParseNode(Context& context, Parse::ImportDeclId /*node_id*/)
+    -> bool {
+  context.node_stack().PopIf<SemIR::LibraryNameId>();
+  auto introducer =
+      context.decl_introducer_state_stack().Pop<Lex::TokenKind::Import>();
+  LimitModifiersOnDecl(context, introducer, KeywordModifierSet::Export);
   return true;
 }
 
-auto HandleLibraryIntroducer(Context& /*context*/,
-                             Parse::LibraryIntroducerId /*parse_node*/)
+auto HandleParseNode(Context& context, Parse::LibraryIntroducerId /*node_id*/)
+    -> bool {
+  context.decl_introducer_state_stack().Push<Lex::TokenKind::Library>();
+  return true;
+}
+
+auto HandleParseNode(Context& context, Parse::LibraryDeclId /*node_id*/)
+    -> bool {
+  context.node_stack().PopIf<SemIR::LibraryNameId>();
+  auto introducer =
+      context.decl_introducer_state_stack().Pop<Lex::TokenKind::Library>();
+  LimitModifiersOnDecl(context, introducer, KeywordModifierSet::Impl);
+  return true;
+}
+
+auto HandleParseNode(Context& context, Parse::PackageIntroducerId /*node_id*/)
+    -> bool {
+  context.decl_introducer_state_stack().Push<Lex::TokenKind::Package>();
+  return true;
+}
+
+auto HandleParseNode(Context& context, Parse::PackageDeclId /*node_id*/)
+    -> bool {
+  context.node_stack().PopIf<SemIR::LibraryNameId>();
+  auto introducer =
+      context.decl_introducer_state_stack().Pop<Lex::TokenKind::Package>();
+  LimitModifiersOnDecl(context, introducer, KeywordModifierSet::Impl);
+  return true;
+}
+
+auto HandleParseNode(Context& context, Parse::LibrarySpecifierId /*node_id*/)
+    -> bool {
+  CARBON_CHECK(context.node_stack().PeekIs<SemIR::LibraryNameId>());
+  return true;
+}
+
+auto HandleParseNode(Context& /*context*/, Parse::PackageNameId /*node_id*/)
     -> bool {
   return true;
 }
 
-auto HandleLibraryDirective(Context& /*context*/,
-                            Parse::LibraryDirectiveId /*parse_node*/) -> bool {
+auto HandleParseNode(Context& context, Parse::LibraryNameId node_id) -> bool {
+  // This is discarded in this file's uses, but is used by modifiers for `extern
+  // library`.
+  auto literal_id = context.tokens().GetStringLiteralValue(
+      context.parse_tree().node_token(node_id));
+  context.node_stack().Push(
+      node_id, SemIR::LibraryNameId::ForStringLiteralValueId(literal_id));
   return true;
 }
 
-auto HandlePackageIntroducer(Context& /*context*/,
-                             Parse::PackageIntroducerId /*parse_node*/)
+auto HandleParseNode(Context& context, Parse::DefaultLibraryId node_id)
     -> bool {
-  return true;
-}
-
-auto HandlePackageDirective(Context& /*context*/,
-                            Parse::PackageDirectiveId /*parse_node*/) -> bool {
-  return true;
-}
-
-auto HandleLibrarySpecifier(Context& /*context*/,
-                            Parse::LibrarySpecifierId /*parse_node*/) -> bool {
-  return true;
-}
-
-auto HandlePackageName(Context& /*context*/,
-                       Parse::PackageNameId /*parse_node*/) -> bool {
-  return true;
-}
-
-auto HandleLibraryName(Context& /*context*/,
-                       Parse::LibraryNameId /*parse_node*/) -> bool {
-  return true;
-}
-
-auto HandleDefaultLibrary(Context& /*context*/,
-                          Parse::DefaultLibraryId /*parse_node*/) -> bool {
-  return true;
-}
-
-auto HandlePackageApi(Context& /*context*/, Parse::PackageApiId /*parse_node*/)
-    -> bool {
-  return true;
-}
-
-auto HandlePackageImpl(Context& /*context*/,
-                       Parse::PackageImplId /*parse_node*/) -> bool {
+  context.node_stack().Push(node_id, SemIR::LibraryNameId::Default);
   return true;
 }
 

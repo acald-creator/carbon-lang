@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
-load("//bazel/sh_run:rules.bzl", "glob_sh_run")
+load("//bazel/manifest:defs.bzl", "manifest")
 load("//testing/fuzzing:rules.bzl", "cc_fuzz_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -11,6 +11,11 @@ package(default_visibility = ["//visibility:public"])
 filegroup(
     name = "testdata",
     data = glob(["testdata/**/*.carbon"]),
+)
+
+manifest(
+    name = "testdata.txt",
+    srcs = [":testdata"],
 )
 
 cc_library(
@@ -25,7 +30,9 @@ cc_library(
     deps = [
         "//common:check",
         "//common:enum_base",
+        "//common:ostream",
         "//toolchain/base:index_base",
+        "//toolchain/lex:token_index",
         "//toolchain/lex:token_kind",
         "@llvm-project//llvm:Support",
     ],
@@ -44,7 +51,8 @@ cc_test(
         "//toolchain/diagnostics:mocks",
         "//toolchain/lex",
         "//toolchain/lex:tokenized_buffer",
-        "@com_google_googletest//:gtest",
+        "//toolchain/testing:compile_helper",
+        "@googletest//:gtest",
     ],
 )
 
@@ -60,6 +68,8 @@ cc_library(
         "//common:check",
         "//common:ostream",
         "//common:vlog",
+        "//toolchain/diagnostics:diagnostic_emitter",
+        "//toolchain/diagnostics:format_providers",
         "//toolchain/lex:token_kind",
         "//toolchain/lex:tokenized_buffer",
         "@llvm-project//llvm:Support",
@@ -73,20 +83,38 @@ cc_library(
     glob([
         "handle_*.cpp",
     ]),
-    hdrs = ["parse.h"],
+    hdrs = [
+        "handle.h",
+        "parse.h",
+    ],
     deps = [
         ":context",
+        ":dump",
         ":node_kind",
         ":state",
         ":tree",
         "//common:check",
         "//common:ostream",
         "//toolchain/base:pretty_stack_trace_function",
-        "//toolchain/base:value_store",
+        "//toolchain/base:shared_value_stores",
         "//toolchain/diagnostics:diagnostic_emitter",
+        "//toolchain/diagnostics:format_providers",
         "//toolchain/lex:token_kind",
         "//toolchain/lex:tokenized_buffer",
     ],
+)
+
+cc_library(
+    name = "dump",
+    srcs = ["dump.cpp"],
+    hdrs = ["dump.h"],
+    deps = [
+        ":tree",
+        "//common:ostream",
+        "//toolchain/lex:dump",
+    ],
+    # Always link dump methods.
+    alwayslink = 1,
 )
 
 cc_library(
@@ -102,14 +130,20 @@ cc_library(
     srcs = [
         "extract.cpp",
         "tree.cpp",
+        "tree_and_subtrees.cpp",
     ],
-    hdrs = ["tree.h"],
+    hdrs = [
+        "tree.h",
+        "tree_and_subtrees.h",
+    ],
     deps = [
         ":node_kind",
         "//common:check",
         "//common:error",
         "//common:ostream",
         "//common:struct_reflection",
+        "//toolchain/base:value_store",
+        "//toolchain/lex:token_index",
         "//toolchain/lex:tokenized_buffer",
         "@llvm-project//llvm:Support",
     ],
@@ -124,15 +158,16 @@ cc_test(
         ":parse",
         ":tree",
         "//common:ostream",
+        "//common:raw_string_ostream",
         "//testing/base:gtest_main",
-        "//testing/base:test_raw_ostream",
-        "//toolchain/base:value_store",
+        "//toolchain/base:shared_value_stores",
         "//toolchain/diagnostics:diagnostic_emitter",
         "//toolchain/diagnostics:mocks",
         "//toolchain/lex",
         "//toolchain/lex:tokenized_buffer",
+        "//toolchain/testing:compile_helper",
         "//toolchain/testing:yaml_test_helpers",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -145,21 +180,12 @@ cc_fuzz_test(
     deps = [
         ":parse",
         "//common:check",
-        "//toolchain/base:value_store",
+        "//testing/fuzzing:libfuzzer_header",
+        "//toolchain/base:shared_value_stores",
         "//toolchain/diagnostics:diagnostic_emitter",
         "//toolchain/diagnostics:null_diagnostics",
         "//toolchain/lex",
         "@llvm-project//llvm:Support",
-    ],
-)
-
-cc_library(
-    name = "tree_node_location_translator",
-    hdrs = ["tree_node_location_translator.h"],
-    deps = [
-        ":tree",
-        "//toolchain/diagnostics:diagnostic_emitter",
-        "//toolchain/lex:tokenized_buffer",
     ],
 )
 
@@ -182,29 +208,24 @@ cc_test(
         ":precedence",
         "//testing/base:gtest_main",
         "//toolchain/lex:token_kind",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
     ],
 )
 
-glob_sh_run(
-    args = [
-        "$(location //toolchain/driver:carbon)",
-        "compile",
-        "--phase=parse",
-        "--dump-parse-tree",
+cc_test(
+    name = "coverage_test",
+    size = "small",
+    srcs = ["coverage_test.cpp"],
+    args = ["--testdata_manifest=$(location :testdata.txt)"],
+    data = [
+        ":testdata",
+        ":testdata.txt",
     ],
-    data = ["//toolchain/driver:carbon"],
-    file_exts = ["carbon"],
-)
-
-glob_sh_run(
-    args = [
-        "$(location //toolchain/driver:carbon)",
-        "-v",
-        "compile",
-        "--phase=parse",
+    deps = [
+        ":node_kind",
+        "//testing/base:gtest_main",
+        "//toolchain/testing:coverage_helper",
+        "@abseil-cpp//absl/flags:flag",
+        "@googletest//:gtest",
     ],
-    data = ["//toolchain/driver:carbon"],
-    file_exts = ["carbon"],
-    run_ext = "verbose",
 )

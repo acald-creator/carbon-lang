@@ -5,6 +5,7 @@
 #include "toolchain/lex/token_kind.h"
 #include "toolchain/lex/tokenized_buffer.h"
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 #include "toolchain/parse/node_kind.h"
 #include "toolchain/parse/state.h"
 
@@ -14,7 +15,7 @@ auto HandleAlias(Context& context) -> void {
   auto state = context.PopState();
 
   context.PushState(state, State::AliasAfterName);
-  context.PushState(State::DeclNameAndParamsAsNone, state.token);
+  context.PushState(State::DeclNameAndParams, state.token);
 }
 
 auto HandleAliasAfterName(Context& context) -> void {
@@ -32,7 +33,7 @@ auto HandleAliasAfterName(Context& context) -> void {
     context.PushState(State::Expr);
   } else {
     CARBON_DIAGNOSTIC(ExpectedAliasInitializer, Error,
-                      "`alias` requires a `=` for the source.");
+                      "`alias` requires a `=` for the source");
     context.emitter().Emit(*context.position(), ExpectedAliasInitializer);
     context.RecoverFromDeclError(state, NodeKind::Alias,
                                  /*skip_past_likely_end=*/true);
@@ -42,20 +43,9 @@ auto HandleAliasAfterName(Context& context) -> void {
 auto HandleAliasFinish(Context& context) -> void {
   auto state = context.PopState();
 
-  if (state.has_error) {
-    context.RecoverFromDeclError(state, NodeKind::Alias,
-                                 /*skip_past_likely_end=*/true);
-    return;
-  }
-
-  if (auto semi = context.ConsumeIf(Lex::TokenKind::Semi)) {
-    context.AddNode(NodeKind::Alias, *semi, state.subtree_start,
-                    state.has_error);
-  } else {
-    context.EmitExpectedDeclSemi(Lex::TokenKind::Alias);
-    context.RecoverFromDeclError(state, NodeKind::Alias,
-                                 /*skip_past_likely_end=*/true);
-  }
+  context.AddNodeExpectingDeclSemi(state, NodeKind::Alias,
+                                   Lex::TokenKind::Alias,
+                                   /*is_def_allowed=*/false);
 }
 
 }  // namespace Carbon::Parse

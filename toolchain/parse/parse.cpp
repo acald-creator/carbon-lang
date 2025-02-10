@@ -2,30 +2,26 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "toolchain/parse/parse.h"
+
 #include "common/check.h"
 #include "toolchain/base/pretty_stack_trace_function.h"
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 #include "toolchain/parse/node_kind.h"
 
 namespace Carbon::Parse {
 
-// Declare handlers for each parse state.
-#define CARBON_PARSE_STATE(Name) auto Handle##Name(Context& context) -> void;
-#include "toolchain/parse/state.def"
-
 auto HandleInvalid(Context& context) -> void {
-  CARBON_FATAL() << "The Invalid state shouldn't be on the stack: "
-                 << context.PopState();
+  CARBON_FATAL("The Invalid state shouldn't be on the stack: {0}",
+               context.PopState());
 }
 
 auto Parse(Lex::TokenizedBuffer& tokens, DiagnosticConsumer& consumer,
            llvm::raw_ostream* vlog_stream) -> Tree {
-  Lex::TokenLocationTranslator translator(&tokens);
-  Lex::TokenDiagnosticEmitter emitter(translator, consumer);
-
   // Delegate to the parser.
   Tree tree(tokens);
-  Context context(tree, tokens, emitter, vlog_stream);
+  Context context(&tree, &tokens, &consumer, vlog_stream);
   PrettyStackTraceFunction context_dumper(
       [&](llvm::raw_ostream& output) { context.PrintForStackDump(output); });
 
@@ -46,6 +42,10 @@ auto Parse(Lex::TokenizedBuffer& tokens, DiagnosticConsumer& consumer,
 
   context.AddLeafNode(NodeKind::FileEnd, *context.position());
 
+  // Mark the tree as potentially having errors if there were errors coming in
+  // from the tokenized buffer or we diagnosed new errors.
+  tree.set_has_errors(tokens.has_errors() || context.has_errors());
+
   if (auto verify = tree.Verify(); !verify.ok()) {
     // TODO: This is temporarily printing to stderr directly during development.
     // If we can, restrict this to a subtree with the error and add it to the
@@ -54,7 +54,7 @@ auto Parse(Lex::TokenizedBuffer& tokens, DiagnosticConsumer& consumer,
     // hopefully comfortable copy-pasting stderr when there are bugs in tree
     // construction.
     tree.Print(llvm::errs());
-    CARBON_FATAL() << "Invalid tree returned by Parse(): " << verify.error();
+    CARBON_FATAL("Invalid tree returned by Parse(): {0}", verify.error());
   }
   return tree;
 }

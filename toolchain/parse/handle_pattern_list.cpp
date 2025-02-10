@@ -3,16 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 
 // Handles PatternListElementAs(Implicit|Tuple).
 static auto HandlePatternListElement(Context& context, State pattern_state,
                                      State finish_state) -> void {
-  context.PopAndDiscardState();
+  auto state = context.PopState();
 
-  context.PushState(finish_state);
-  context.PushState(pattern_state);
+  context.PushStateForPattern(finish_state, state.in_var_pattern);
+  context.PushStateForPattern(pattern_state, state.in_var_pattern);
 }
 
 auto HandlePatternListElementAsImplicit(Context& context) -> void {
@@ -38,7 +39,7 @@ static auto HandlePatternListElementFinish(Context& context,
   if (context.ConsumeListToken(NodeKind::PatternListComma, close_token,
                                state.has_error) ==
       Context::ListTokenKind::Comma) {
-    context.PushState(param_state);
+    context.PushStateForPattern(param_state, state.in_var_pattern);
   }
 }
 
@@ -53,17 +54,17 @@ auto HandlePatternListElementFinishAsTuple(Context& context) -> void {
 }
 
 // Handles PatternListAs(Implicit|Tuple).
-static auto HandlePatternList(Context& context, NodeKind parse_node_kind,
+static auto HandlePatternList(Context& context, NodeKind node_kind,
                               Lex::TokenKind open_token_kind,
                               Lex::TokenKind close_token_kind,
                               State param_state, State finish_state) -> void {
-  context.PopAndDiscardState();
+  auto state = context.PopState();
 
-  context.PushState(finish_state);
-  context.AddLeafNode(parse_node_kind, context.ConsumeChecked(open_token_kind));
+  context.PushStateForPattern(finish_state, state.in_var_pattern);
+  context.AddLeafNode(node_kind, context.ConsumeChecked(open_token_kind));
 
   if (!context.PositionIs(close_token_kind)) {
-    context.PushState(param_state);
+    context.PushStateForPattern(param_state, state.in_var_pattern);
   }
 }
 
@@ -82,12 +83,12 @@ auto HandlePatternListAsTuple(Context& context) -> void {
 }
 
 // Handles PatternListFinishAs(Implicit|Tuple).
-static auto HandlePatternListFinish(Context& context, NodeKind parse_node_kind,
+static auto HandlePatternListFinish(Context& context, NodeKind node_kind,
                                     Lex::TokenKind token_kind) -> void {
   auto state = context.PopState();
 
-  context.AddNode(parse_node_kind, context.ConsumeChecked(token_kind),
-                  state.subtree_start, state.has_error);
+  context.AddNode(node_kind, context.ConsumeChecked(token_kind),
+                  state.has_error);
 }
 
 auto HandlePatternListFinishAsImplicit(Context& context) -> void {

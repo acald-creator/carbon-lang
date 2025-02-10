@@ -3,11 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/operators/fail_precedence_and_or.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/operators/fail_precedence_and_or.carbon
 
 fn F() {
-  // CHECK:STDERR: fail_precedence_and_or.carbon:[[@LINE+3]]:11: ERROR: Parentheses are required to disambiguate operator precedence.
+  // CHECK:STDERR: fail_precedence_and_or.carbon:[[@LINE+4]]:11: error: parentheses are required to disambiguate operator precedence [OperatorRequiresParentheses]
   // CHECK:STDERR:   a and b or c;
   // CHECK:STDERR:           ^~
+  // CHECK:STDERR:
   a and b or c;
 }
 
@@ -15,7 +20,7 @@ fn F() {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'F'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'F'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:       {kind: 'FunctionDefinitionStart', text: '{', subtree_size: 5},

@@ -5,6 +5,7 @@
 #include "common/init_llvm.h"
 
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace Carbon {
 
@@ -16,12 +17,12 @@ InitLLVM::InitLLVM(int& argc, char**& argv)
       // make a copy of the argv that LLVM produces in order to support
       // mutation.
       args_(argv, argv + argc) {
-  // Return our mutable copy of argv for the program to use.
-  argc = args_.size();
-  argv = args_.data();
-
-  // `argv[argc]` is expected to be a null pointer.
+  // `argv[argc]` is expected to be a null pointer (may reallocate `args_`).
   args_.push_back(nullptr);
+
+  // Return our mutable copy of argv for the program to use.
+  argc = args_.size() - 1;
+  argv = args_.data();
 
   llvm::setBugReportMsg(
       "Please report issues to "
@@ -32,6 +33,10 @@ InitLLVM::InitLLVM(int& argc, char**& argv)
   if (InitializeTargets) {
     InitializeTargets();
   }
+
+  // Printing to stderr should flush stdout. This is most noticeable when stderr
+  // is piped to stdout.
+  llvm::errs().tie(&llvm::outs());
 }
 
 InitLLVM::InitializeTargetsFn* InitLLVM::InitializeTargets = nullptr;

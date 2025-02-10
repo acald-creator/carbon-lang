@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/generics/params/empty.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/generics/params/empty.carbon
 
 class Foo();
 
@@ -12,12 +16,12 @@ interface Bar() {}
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:       {kind: 'ClassIntroducer', text: 'class'},
-// CHECK:STDOUT:       {kind: 'IdentifierName', text: 'Foo'},
+// CHECK:STDOUT:       {kind: 'IdentifierNameBeforeParams', text: 'Foo'},
 // CHECK:STDOUT:         {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:       {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:     {kind: 'ClassDecl', text: ';', subtree_size: 5},
 // CHECK:STDOUT:         {kind: 'InterfaceIntroducer', text: 'interface'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'Bar'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'Bar'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:       {kind: 'InterfaceDefinitionStart', text: '{', subtree_size: 5},

@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
-load("//bazel/sh_run:rules.bzl", "glob_sh_run")
 load("//testing/fuzzing:rules.bzl", "cc_fuzz_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -32,7 +31,7 @@ cc_test(
     deps = [
         ":token_kind",
         "//testing/base:gtest_main",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -61,7 +60,7 @@ cc_library(
         "//common:check",
         "//common:string_helpers",
         "//toolchain/diagnostics:diagnostic_emitter",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -75,6 +74,7 @@ cc_library(
         ":helpers",
         "//common:check",
         "//toolchain/diagnostics:diagnostic_emitter",
+        "//toolchain/diagnostics:format_providers",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -86,8 +86,9 @@ cc_binary(
     deps = [
         ":numeric_literal",
         "//common:check",
+        "//testing/base:benchmark_main",
         "//toolchain/diagnostics:null_diagnostics",
-        "@com_github_google_benchmark//:benchmark_main",
+        "@google_benchmark//:benchmark",
     ],
 )
 
@@ -102,7 +103,7 @@ cc_test(
         "//common:ostream",
         "//testing/base:gtest_main",
         "//toolchain/diagnostics:diagnostic_emitter",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -114,6 +115,7 @@ cc_fuzz_test(
     corpus = glob(["fuzzer_corpus/numeric_literal/*"]),
     deps = [
         ":numeric_literal",
+        "//testing/fuzzing:libfuzzer_header",
         "//toolchain/diagnostics:diagnostic_emitter",
         "//toolchain/diagnostics:null_diagnostics",
         "@llvm-project//llvm:Support",
@@ -139,8 +141,9 @@ cc_binary(
     srcs = ["string_literal_benchmark.cpp"],
     deps = [
         ":string_literal",
+        "//testing/base:benchmark_main",
         "//toolchain/diagnostics:null_diagnostics",
-        "@com_github_google_benchmark//:benchmark_main",
+        "@google_benchmark//:benchmark",
     ],
 )
 
@@ -155,7 +158,7 @@ cc_test(
         "//common:ostream",
         "//testing/base:gtest_main",
         "//toolchain/diagnostics:diagnostic_emitter",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -168,6 +171,7 @@ cc_fuzz_test(
     deps = [
         ":string_literal",
         "//common:check",
+        "//testing/fuzzing:libfuzzer_header",
         "//toolchain/diagnostics:diagnostic_emitter",
         "//toolchain/diagnostics:null_diagnostics",
         "@llvm-project//llvm:Support",
@@ -180,16 +184,40 @@ cc_library(
     hdrs = ["lex.h"],
     deps = [
         ":character_set",
+        ":dump",
         ":helpers",
         ":numeric_literal",
         ":string_literal",
+        ":token_index",
         ":token_kind",
         ":tokenized_buffer",
         "//common:check",
-        "//toolchain/base:value_store",
+        "//common:variant_helpers",
+        "//toolchain/base:shared_value_stores",
         "//toolchain/diagnostics:diagnostic_emitter",
         "//toolchain/source:source_buffer",
         "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_library(
+    name = "dump",
+    srcs = ["dump.cpp"],
+    hdrs = ["dump.h"],
+    deps = [
+        ":tokenized_buffer",
+        "//common:ostream",
+    ],
+    # Always link dump methods.
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "token_index",
+    hdrs = ["token_index.h"],
+    deps = [
+        ":token_kind",
+        "//toolchain/base:index_base",
     ],
 )
 
@@ -202,12 +230,14 @@ cc_library(
         ":helpers",
         ":numeric_literal",
         ":string_literal",
+        ":token_index",
         ":token_kind",
         "//common:check",
         "//common:ostream",
         "//common:string_helpers",
         "//toolchain/base:index_base",
-        "//toolchain/base:value_store",
+        "//toolchain/base:mem_usage",
+        "//toolchain/base:shared_value_stores",
         "//toolchain/diagnostics:diagnostic_emitter",
         "//toolchain/source:source_buffer",
         "@llvm-project//llvm:Support",
@@ -222,8 +252,8 @@ cc_library(
         ":lex",
         ":tokenized_buffer",
         "//common:check",
-        "//toolchain/base:value_store",
-        "@com_google_googletest//:gtest",
+        "//toolchain/base:shared_value_stores",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -234,15 +264,17 @@ cc_test(
     srcs = ["tokenized_buffer_test.cpp"],
     deps = [
         ":lex",
+        ":token_kind",
         ":tokenized_buffer",
         ":tokenized_buffer_test_helpers",
+        "//common:raw_string_ostream",
         "//testing/base:gtest_main",
-        "//testing/base:test_raw_ostream",
-        "//toolchain/base:value_store",
+        "//toolchain/base:shared_value_stores",
         "//toolchain/diagnostics:diagnostic_emitter",
         "//toolchain/diagnostics:mocks",
+        "//toolchain/testing:compile_helper",
         "//toolchain/testing:yaml_test_helpers",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -255,7 +287,8 @@ cc_fuzz_test(
     deps = [
         ":lex",
         "//common:check",
-        "//toolchain/base:value_store",
+        "//testing/fuzzing:libfuzzer_header",
+        "//toolchain/base:shared_value_stores",
         "//toolchain/diagnostics:diagnostic_emitter",
         "//toolchain/diagnostics:null_diagnostics",
         "@llvm-project//llvm:Support",
@@ -271,34 +304,14 @@ cc_binary(
         ":token_kind",
         ":tokenized_buffer",
         "//common:check",
-        "//toolchain/base:value_store",
+        "//common:raw_string_ostream",
+        "//testing/base:benchmark_main",
+        "//testing/base:source_gen_lib",
+        "//toolchain/base:shared_value_stores",
         "//toolchain/diagnostics:diagnostic_emitter",
         "//toolchain/diagnostics:null_diagnostics",
-        "@com_github_google_benchmark//:benchmark_main",
-        "@com_google_absl//absl/random",
+        "@abseil-cpp//absl/random",
+        "@google_benchmark//:benchmark",
         "@llvm-project//llvm:Support",
     ],
-)
-
-glob_sh_run(
-    args = [
-        "$(location //toolchain/driver:carbon)",
-        "compile",
-        "--phase=lex",
-        "--dump-tokens",
-    ],
-    data = ["//toolchain/driver:carbon"],
-    file_exts = ["carbon"],
-)
-
-glob_sh_run(
-    args = [
-        "$(location //toolchain/driver:carbon)",
-        "-v",
-        "compile",
-        "--phase=lex",
-    ],
-    data = ["//toolchain/driver:carbon"],
-    file_exts = ["carbon"],
-    run_ext = "verbose",
 )

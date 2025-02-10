@@ -4,6 +4,8 @@
 
 #include "testing/file_test/file_test_base.h"
 
+#include <gmock/gmock.h>
+
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -14,9 +16,13 @@
 #include "absl/flags/parse.h"
 #include "common/check.h"
 #include "common/error.h"
+#include "common/exe_path.h"
 #include "common/init_llvm.h"
+#include "common/raw_string_ostream.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/PrettyStackTrace.h"
@@ -41,16 +47,30 @@ ABSL_FLAG(bool, dump_output, false,
 
 namespace Carbon::Testing {
 
-using ::testing::Eq;
+// While these are marked as "internal" APIs, they seem to work and be pretty
+// widely used for their exact documented behavior.
+using ::testing::internal::CaptureStderr;
+using ::testing::internal::CaptureStdout;
+using ::testing::internal::GetCapturedStderr;
+using ::testing::internal::GetCapturedStdout;
+
 using ::testing::Matcher;
 using ::testing::MatchesRegex;
 using ::testing::StrEq;
 
+static constexpr llvm::StringLiteral StdinFilename = "STDIN";
+
 // Reads a file to string.
-static auto ReadFile(std::string_view path) -> std::string {
-  std::ifstream proto_file(path);
+static auto ReadFile(std::string_view path) -> ErrorOr<std::string> {
+  std::ifstream proto_file{std::string(path)};
+  if (proto_file.fail()) {
+    return Error(llvm::formatv("Error opening file: {0}", path));
+  }
   std::stringstream buffer;
   buffer << proto_file.rdbuf();
+  if (proto_file.fail()) {
+    return Error(llvm::formatv("Error reading file: {0}", path));
+  }
   proto_file.close();
   return buffer.str();
 }
@@ -66,63 +86,117 @@ static auto SplitOutput(llvm::StringRef output)
   return llvm::SmallVector<std::string_view>(lines.begin(), lines.end());
 }
 
+// Verify that the success and `fail_` prefix use correspond. Separately handle
+// both cases for clearer test failures.
+static auto CompareFailPrefix(llvm::StringRef filename, bool success) -> void {
+  if (success) {
+    EXPECT_FALSE(filename.starts_with("fail_"))
+        << "`" << filename
+        << "` succeeded; if success is expected, remove the `fail_` "
+           "prefix.";
+  } else {
+    EXPECT_TRUE(filename.starts_with("fail_"))
+        << "`" << filename
+        << "` failed; if failure is expected, add the `fail_` prefix.";
+  }
+}
+
+// Modes for GetBazelCommand.
+enum class BazelMode : uint8_t {
+  Autoupdate,
+  Dump,
+  Test,
+};
+
+// Returns the requested bazel command string for the given execution mode.
+static auto GetBazelCommand(BazelMode mode, llvm::StringRef test_name)
+    -> std::string {
+  RawStringOstream args;
+
+  const char* target = getenv("TEST_TARGET");
+  args << "bazel " << ((mode == BazelMode::Test) ? "test" : "run") << " "
+       << (target ? target : "<target>") << " ";
+
+  switch (mode) {
+    case BazelMode::Autoupdate:
+      args << "-- --autoupdate ";
+      break;
+
+    case BazelMode::Dump:
+      args << "-- --dump_output ";
+      break;
+
+    case BazelMode::Test:
+      args << "--test_arg=";
+      break;
+  }
+
+  args << "--file_tests=";
+  args << test_name;
+  return args.TakeStr();
+}
+
 // Runs a test and compares output. This keeps output split by line so that
 // issues are a little easier to identify by the different line.
 auto FileTestBase::TestBody() -> void {
-  std::string test_command;
-  std::optional<llvm::PrettyStackTraceString> stack_trace_entry;
-
-  // If we're being run from bazel, provide some assistance for understanding
-  // and reproducing failures.
-  const char* target = getenv("TEST_TARGET");
-  if (target) {
-    constexpr const char* CommandFormat =
-        "bazel {0} {1} --test_arg=--file_tests={2}";
-    test_command = llvm::formatv(CommandFormat, "test", target, test_name_);
-    // Add a crash trace entry with the run command.
-    stack_trace_entry.emplace(test_command.c_str());
-
-    // This advice overrides the --file_tests flag provided by the file_test
-    // rule.
-    llvm::errs() << "\nTo test this file alone, run:\n  " << test_command
-                 << "\n\nTo view output, run:\n  "
-                 << llvm::formatv(CommandFormat, "run", target, test_name_)
-                 << " --test_arg=--dump_output\n\n";
-  }
+  // Add a crash trace entry with the single-file test command.
+  std::string test_command = GetBazelCommand(BazelMode::Test, test_name_);
+  llvm::PrettyStackTraceString stack_trace_entry(test_command.c_str());
+  llvm::errs() << "\nTo test this file alone, run:\n  " << test_command
+               << "\n\n";
 
   TestContext context;
   auto run_result = ProcessTestFileAndRun(context);
   ASSERT_TRUE(run_result.ok()) << run_result.error();
   ValidateRun();
   auto test_filename = std::filesystem::path(test_name_.str()).filename();
-  EXPECT_THAT(!llvm::StringRef(test_filename).starts_with("fail_"),
-              Eq(context.exit_with_success))
-      << "Tests should be prefixed with `fail_` if and only if running them "
-         "is expected to fail.";
+
+  // Check success/failure against `fail_` prefixes.
+  if (context.run_result.per_file_success.empty()) {
+    CompareFailPrefix(test_filename.string(), context.run_result.success);
+  } else {
+    bool require_overall_failure = false;
+    for (const auto& [filename, success] :
+         context.run_result.per_file_success) {
+      CompareFailPrefix(filename, success);
+      if (!success) {
+        require_overall_failure = true;
+      }
+    }
+
+    if (require_overall_failure) {
+      EXPECT_FALSE(context.run_result.success)
+          << "There is a per-file failure expectation, so the overall result "
+             "should have been a failure.";
+    } else {
+      // Individual files all succeeded, so the prefix is enforced on the main
+      // test file.
+      CompareFailPrefix(test_filename.string(), context.run_result.success);
+    }
+  }
 
   // Check results. Include a reminder of the autoupdate command for any
   // stdout/stderr differences.
   std::string update_message;
-  if (target && context.autoupdate_line_number) {
+  if (context.autoupdate_line_number) {
     update_message = llvm::formatv(
-        "If these differences are expected, try the autoupdater:\n"
-        "\tbazel run {0} -- --autoupdate --file_tests={1}",
-        target, test_name_);
+        "If these differences are expected, try the autoupdater:\n  {0}",
+        GetBazelCommand(BazelMode::Autoupdate, test_name_));
   } else {
     update_message =
         "If these differences are expected, content must be updated manually.";
   }
   SCOPED_TRACE(update_message);
   if (context.check_subset) {
-    EXPECT_THAT(SplitOutput(context.stdout),
+    EXPECT_THAT(SplitOutput(context.actual_stdout),
                 IsSupersetOf(context.expected_stdout));
-    EXPECT_THAT(SplitOutput(context.stderr),
+    EXPECT_THAT(SplitOutput(context.actual_stderr),
                 IsSupersetOf(context.expected_stderr));
 
   } else {
-    EXPECT_THAT(SplitOutput(context.stdout),
+    EXPECT_THAT(SplitOutput(context.actual_stdout),
                 ElementsAreArray(context.expected_stdout));
-    EXPECT_THAT(SplitOutput(context.stderr),
+    EXPECT_THAT(SplitOutput(context.actual_stderr),
                 ElementsAreArray(context.expected_stderr));
   }
 
@@ -156,9 +230,12 @@ auto FileTestBase::RunAutoupdater(const TestContext& context, bool dry_run)
   }
 
   return FileTestAutoupdater(
-             std::filesystem::absolute(test_name_.str()), context.input_content,
-             filenames, *context.autoupdate_line_number,
-             context.non_check_lines, context.stdout, context.stderr,
+             std::filesystem::absolute(test_name_.str()),
+             GetBazelCommand(BazelMode::Test, test_name_),
+             GetBazelCommand(BazelMode::Dump, test_name_),
+             context.input_content, filenames, *context.autoupdate_line_number,
+             context.autoupdate_split, context.non_check_lines,
+             context.actual_stdout, context.actual_stderr,
              GetDefaultFileRE(expected_filenames),
              GetLineNumberReplacements(expected_filenames),
              [&](std::string& line) { DoExtraCheckReplacements(line); })
@@ -182,6 +259,7 @@ auto FileTestBase::Autoupdate() -> ErrorOr<bool> {
 
 auto FileTestBase::DumpOutput() -> ErrorOr<Success> {
   TestContext context;
+  context.dump_output = true;
   std::string banner(79, '=');
   banner.append("\n");
   llvm::errs() << banner << "= " << test_name_ << "\n";
@@ -191,10 +269,9 @@ auto FileTestBase::DumpOutput() -> ErrorOr<Success> {
     return ErrorBuilder() << "Error updating " << test_name_ << ": "
                           << run_result.error();
   }
-  llvm::errs() << banner << "= stderr\n"
-               << banner << context.stderr << banner << "= stdout\n"
-               << banner << context.stdout << banner << "= Exit with success: "
-               << (context.exit_with_success ? "true" : "false") << "\n"
+  llvm::errs() << banner << context.actual_stdout << banner
+               << "= Exit with success: "
+               << (context.run_result.success ? "true" : "false") << "\n"
                << banner;
   return Success();
 }
@@ -204,14 +281,14 @@ auto FileTestBase::GetLineNumberReplacements(
     -> llvm::SmallVector<LineNumberReplacement> {
   return {{.has_file = true,
            .re = std::make_shared<RE2>(
-               llvm::formatv(R"(({0}):(\d+))", llvm::join(filenames, "|"))),
+               llvm::formatv(R"(({0}):(\d+)?)", llvm::join(filenames, "|"))),
            .line_formatv = R"({0})"}};
 }
 
 auto FileTestBase::ProcessTestFileAndRun(TestContext& context)
     -> ErrorOr<Success> {
   // Store the file so that test_files can use references to content.
-  context.input_content = ReadFile(test_name_);
+  CARBON_ASSIGN_OR_RETURN(context.input_content, ReadFile(test_name_));
 
   // Load expected output.
   CARBON_RETURN_IF_ERROR(ProcessTestFile(context));
@@ -219,21 +296,37 @@ auto FileTestBase::ProcessTestFileAndRun(TestContext& context)
   // Process arguments.
   if (context.test_args.empty()) {
     context.test_args = GetDefaultArgs();
+    context.test_args.append(context.extra_args);
   }
   CARBON_RETURN_IF_ERROR(
       DoArgReplacements(context.test_args, context.test_files));
 
+  // stdin needs to exist on-disk for compatibility. We'll use a pointer for it.
+  FILE* input_stream = nullptr;
+  auto erase_input_on_exit = llvm::make_scope_exit([&input_stream]() {
+    if (input_stream) {
+      // fclose should delete the tmpfile.
+      fclose(input_stream);
+      input_stream = nullptr;
+    }
+  });
+
   // Create the files in-memory.
-  llvm::vfs::InMemoryFileSystem fs;
+  llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> fs =
+      new llvm::vfs::InMemoryFileSystem;
   for (const auto& test_file : context.test_files) {
-    if (!fs.addFile(test_file.filename, /*ModificationTime=*/0,
-                    llvm::MemoryBuffer::getMemBuffer(
-                        test_file.content, test_file.filename,
-                        /*RequiresNullTerminator=*/false))) {
+    if (test_file.filename == StdinFilename) {
+      input_stream = tmpfile();
+      fwrite(test_file.content.c_str(), sizeof(char), test_file.content.size(),
+             input_stream);
+      rewind(input_stream);
+    } else if (!fs->addFile(test_file.filename, /*ModificationTime=*/0,
+                            llvm::MemoryBuffer::getMemBuffer(
+                                test_file.content, test_file.filename,
+                                /*RequiresNullTerminator=*/false))) {
       return ErrorBuilder() << "File is repeated: " << test_file.filename;
     }
   }
-
   // Convert the arguments to StringRef and const char* to match the
   // expectations of PrettyStackTraceProgram and Run.
   llvm::SmallVector<llvm::StringRef> test_args_ref;
@@ -251,17 +344,46 @@ auto FileTestBase::ProcessTestFileAndRun(TestContext& context)
   llvm::PrettyStackTraceProgram stack_trace_entry(
       test_argv_for_stack_trace.size() - 1, test_argv_for_stack_trace.data());
 
-  // Capture trace streaming, but only when in debug mode.
-  llvm::raw_svector_ostream stdout(context.stdout);
-  llvm::raw_svector_ostream stderr(context.stderr);
-  CARBON_ASSIGN_OR_RETURN(context.exit_with_success,
-                          Run(test_args_ref, fs, stdout, stderr));
+  // Execution must be serialized for either serial tests or console output.
+  std::unique_lock<std::mutex> output_lock;
+  if (output_mutex_ &&
+      (context.capture_console_output || !AllowParallelRun())) {
+    output_lock = std::unique_lock<std::mutex>(*output_mutex_);
+  }
+
+  // Conditionally capture console output. We use a scope exit to ensure the
+  // captures terminate even on run failures.
+  if (context.capture_console_output) {
+    CaptureStderr();
+    CaptureStdout();
+  }
+  auto add_output_on_exit = llvm::make_scope_exit([&]() {
+    if (context.capture_console_output) {
+      // No need to flush stderr.
+      llvm::outs().flush();
+      context.actual_stdout += GetCapturedStdout();
+      context.actual_stderr += GetCapturedStderr();
+    }
+  });
+
+  // Prepare string streams to capture output. In order to address casting
+  // constraints, we split calls to Run as a ternary based on whether we want to
+  // capture output.
+  llvm::raw_svector_ostream output_stream(context.actual_stdout);
+  llvm::raw_svector_ostream error_stream(context.actual_stderr);
+  CARBON_ASSIGN_OR_RETURN(
+      context.run_result,
+      context.dump_output
+          ? Run(test_args_ref, fs, input_stream, llvm::outs(), llvm::errs())
+          : Run(test_args_ref, fs, input_stream, output_stream, error_stream));
+
   return Success();
 }
 
 auto FileTestBase::DoArgReplacements(
     llvm::SmallVector<std::string>& test_args,
     const llvm::SmallVector<TestFile>& test_files) -> ErrorOr<Success> {
+  auto replacements = GetArgReplacements();
   for (auto* it = test_args.begin(); it != test_args.end(); ++it) {
     auto percent = it->find("%");
     if (percent == std::string::npos) {
@@ -279,7 +401,11 @@ auto FileTestBase::DoArgReplacements(
         }
         it = test_args.erase(it);
         for (const auto& file : test_files) {
-          it = test_args.insert(it, file.filename);
+          const std::string& filename = file.filename;
+          if (filename == StdinFilename || filename.ends_with(".h")) {
+            continue;
+          }
+          it = test_args.insert(it, filename);
           ++it;
         }
         // Back up once because the for loop will advance.
@@ -290,6 +416,21 @@ auto FileTestBase::DoArgReplacements(
         char* tmpdir = getenv("TEST_TMPDIR");
         CARBON_CHECK(tmpdir != nullptr);
         it->replace(percent, 2, llvm::formatv("{0}/temp_file", tmpdir));
+        break;
+      }
+      case '{': {
+        auto end_brace = it->find('}', percent);
+        if (end_brace == std::string::npos) {
+          return ErrorBuilder() << "%{ without closing }: " << *it;
+        }
+        llvm::StringRef substr(&*(it->begin() + percent + 2),
+                               end_brace - percent - 2);
+        auto replacement = replacements.find(substr);
+        if (replacement == replacements.end()) {
+          return ErrorBuilder()
+                 << "unknown substitution: %{" << substr << "}: " << *it;
+        }
+        it->replace(percent, end_brace - percent + 1, replacement->second);
         break;
       }
       default:
@@ -329,9 +470,10 @@ static auto TryConsumeConflictMarker(llvm::StringRef line,
       return true;
     }
 
-    // Look for CHECK lines, which can be discarded.
+    // Look for CHECK and TIP lines, which can be discarded.
     if (line_trimmed.starts_with("// CHECK:STDOUT:") ||
-        line_trimmed.starts_with("// CHECK:STDERR:")) {
+        line_trimmed.starts_with("// CHECK:STDERR:") ||
+        line_trimmed.starts_with("// TIP:")) {
       return true;
     }
 
@@ -356,7 +498,7 @@ struct SplitState {
   auto has_splits() const -> bool { return file_index > 0; }
 
   auto add_content(llvm::StringRef line) -> void {
-    content.append(line);
+    content.append(line.str());
     content.append("\n");
   }
 
@@ -375,13 +517,155 @@ struct SplitState {
   int file_index = 0;
 };
 
+// Reformats `[[@LSP:` and similar keyword as an LSP call with headers.
+static auto ReplaceLspKeywordAt(std::string* content, size_t keyword_pos,
+                                int& lsp_call_id) -> ErrorOr<size_t> {
+  llvm::StringRef content_at_keyword =
+      llvm::StringRef(*content).substr(keyword_pos);
+
+  auto [keyword, body_start] = content_at_keyword.split(":");
+  if (body_start.empty()) {
+    return ErrorBuilder() << "Missing `:` for `"
+                          << content_at_keyword.take_front(10) << "`";
+  }
+
+  // Whether the first param is a method or id.
+  llvm::StringRef method_or_id_label = "method";
+  // Whether to attach the `lsp_call_id`.
+  bool use_call_id = false;
+  // The JSON label for extra content.
+  llvm::StringRef extra_content_label;
+  if (keyword == "[[@LSP-CALL") {
+    use_call_id = true;
+    extra_content_label = "params";
+  } else if (keyword == "[[@LSP-NOTIFY") {
+    extra_content_label = "params";
+  } else if (keyword == "[[@LSP-REPLY") {
+    method_or_id_label = "id";
+    extra_content_label = "result";
+  } else if (keyword != "[[@LSP") {
+    return ErrorBuilder() << "Unrecognized @LSP keyword at `"
+                          << keyword.take_front(10) << "`";
+  }
+
+  static constexpr llvm::StringLiteral LspEnd = "]]";
+  auto body_end = body_start.find(LspEnd);
+  if (body_end == std::string::npos) {
+    return ErrorBuilder() << "Missing `" << LspEnd << "` after `" << keyword
+                          << "`";
+  }
+  llvm::StringRef body = body_start.take_front(body_end);
+  auto [method_or_id, extra_content] = body.split(":");
+
+  // Form the JSON.
+  std::string json = llvm::formatv(R"({{"jsonrpc": "2.0", "{0}": "{1}")",
+                                   method_or_id_label, method_or_id);
+  if (use_call_id) {
+    // Omit quotes on the ID because we know it's an integer.
+    json += llvm::formatv(R"(, "id": {0})", ++lsp_call_id);
+  }
+  if (!extra_content.empty()) {
+    json += ",";
+    if (extra_content_label.empty()) {
+      if (!extra_content.starts_with("\n")) {
+        json += " ";
+      }
+      json += extra_content;
+    } else {
+      json += llvm::formatv(R"( "{0}": {{{1}})", extra_content_label,
+                            extra_content);
+    }
+  }
+  json += "}";
+
+  // Add the Content-Length header. The `2` accounts for extra newlines.
+  auto json_with_header =
+      llvm::formatv("Content-Length: {0}\n\n{1}\n", json.size() + 2, json)
+          .str();
+  int keyword_len =
+      (body_start.data() + body_end + LspEnd.size()) - keyword.data();
+  content->replace(keyword_pos, keyword_len, json_with_header);
+  return keyword_pos + json_with_header.size();
+}
+
+// Replaces the keyword at the given position. Returns the position to start a
+// find for the next keyword.
+static auto ReplaceContentKeywordAt(std::string* content, size_t keyword_pos,
+                                    llvm::StringRef test_name, int& lsp_call_id)
+    -> ErrorOr<size_t> {
+  auto keyword = llvm::StringRef(*content).substr(keyword_pos);
+
+  // Line replacements aren't handled here.
+  static constexpr llvm::StringLiteral Line = "[[@LINE";
+  if (keyword.starts_with(Line)) {
+    // Just move past the prefix to find the next one.
+    return keyword_pos + Line.size();
+  }
+
+  // Replaced with the actual test name.
+  static constexpr llvm::StringLiteral TestName = "[[@TEST_NAME]]";
+  if (keyword.starts_with(TestName)) {
+    content->replace(keyword_pos, TestName.size(), test_name);
+    return keyword_pos + test_name.size();
+  }
+
+  if (keyword.starts_with("[[@LSP")) {
+    return ReplaceLspKeywordAt(content, keyword_pos, lsp_call_id);
+  }
+
+  return ErrorBuilder() << "Unexpected use of `[[@` at `"
+                        << keyword.substr(0, 5) << "`";
+}
+
+// Replaces the content keywords.
+//
+// TEST_NAME is the only content keyword at present, but we do validate that
+// other names are reserved.
+static auto ReplaceContentKeywords(llvm::StringRef filename,
+                                   std::string* content) -> ErrorOr<Success> {
+  static constexpr llvm::StringLiteral Prefix = "[[@";
+
+  auto keyword_pos = content->find(Prefix);
+  // Return early if not finding anything.
+  if (keyword_pos == std::string::npos) {
+    return Success();
+  }
+
+  // Construct the test name by getting the base name without the extension,
+  // then removing any "fail_" or "todo_" prefixes.
+  llvm::StringRef test_name = filename;
+  if (auto last_slash = test_name.rfind("/");
+      last_slash != llvm::StringRef::npos) {
+    test_name = test_name.substr(last_slash + 1);
+  }
+  if (auto ext_dot = test_name.find("."); ext_dot != llvm::StringRef::npos) {
+    test_name = test_name.substr(0, ext_dot);
+  }
+  // Note this also handles `fail_todo_` and `todo_fail_`.
+  test_name.consume_front("todo_");
+  test_name.consume_front("fail_");
+  test_name.consume_front("todo_");
+
+  // A counter for LSP calls.
+  int lsp_call_id = 0;
+  while (keyword_pos != std::string::npos) {
+    CARBON_ASSIGN_OR_RETURN(
+        auto keyword_end,
+        ReplaceContentKeywordAt(content, keyword_pos, test_name, lsp_call_id));
+    keyword_pos = content->find(Prefix, keyword_end);
+  }
+  return Success();
+}
+
 // Adds a file. Used for both split and unsplit test files.
 static auto AddTestFile(llvm::StringRef filename, std::string* content,
                         llvm::SmallVector<FileTestBase::TestFile>* test_files)
-    -> void {
+    -> ErrorOr<Success> {
+  CARBON_RETURN_IF_ERROR(ReplaceContentKeywords(filename, content));
   test_files->push_back(
       {.filename = filename.str(), .content = std::move(*content)});
   content->clear();
+  return Success();
 }
 
 // Process file split ("---") lines when found. Returns true if the line is
@@ -413,7 +697,8 @@ static auto TryConsumeSplit(
 
   // On a file split, add the previous file, then start a new one.
   if (split->has_splits()) {
-    AddTestFile(split->filename, &split->content, test_files);
+    CARBON_RETURN_IF_ERROR(
+        AddTestFile(split->filename, &split->content, test_files));
   } else {
     split->content.clear();
     if (split->found_code_pre_split) {
@@ -436,21 +721,15 @@ static auto TryConsumeSplit(
   return true;
 }
 
-// Transforms an expectation on a given line from `FileCheck` syntax into a
-// standard regex matcher.
-static auto TransformExpectation(int line_index, llvm::StringRef in)
-    -> ErrorOr<Matcher<std::string>> {
-  if (in.empty()) {
-    return Matcher<std::string>{StrEq("")};
-  }
-  if (in[0] != ' ') {
-    return ErrorBuilder() << "Malformated CHECK line: " << in;
-  }
-  std::string str = in.substr(1).str();
+// Converts a `FileCheck`-style expectation string into a single complete regex
+// string by escaping all regex characters outside of the designated `{{...}}`
+// regex sequences, and switching those to a normal regex sub-pattern syntax.
+static void ConvertExpectationStringToRegex(std::string& str) {
   for (int pos = 0; pos < static_cast<int>(str.size());) {
     switch (str[pos]) {
       case '(':
       case ')':
+      case '[':
       case ']':
       case '}':
       case '.':
@@ -466,51 +745,21 @@ static auto TransformExpectation(int line_index, llvm::StringRef in)
         pos += 2;
         break;
       }
-      case '[': {
-        llvm::StringRef line_keyword_cursor = llvm::StringRef(str).substr(pos);
-        if (line_keyword_cursor.consume_front("[[")) {
-          static constexpr llvm::StringLiteral LineKeyword = "@LINE";
-          if (line_keyword_cursor.consume_front(LineKeyword)) {
-            // Allow + or - here; consumeInteger handles -.
-            line_keyword_cursor.consume_front("+");
-            int offset;
-            // consumeInteger returns true for errors, not false.
-            if (line_keyword_cursor.consumeInteger(10, offset) ||
-                !line_keyword_cursor.consume_front("]]")) {
-              return ErrorBuilder()
-                     << "Unexpected @LINE offset at `"
-                     << line_keyword_cursor.substr(0, 5) << "` in: " << in;
-            }
-            std::string int_str = llvm::Twine(line_index + offset).str();
-            int remove_len = (line_keyword_cursor.data() - str.data()) - pos;
-            str.replace(pos, remove_len, int_str);
-            pos += int_str.size();
-          } else {
-            return ErrorBuilder()
-                   << "Unexpected [[, should be {{\\[\\[}} at `"
-                   << line_keyword_cursor.substr(0, 5) << "` in: " << in;
-          }
-        } else {
-          // Escape the `[`.
-          str.insert(pos, "\\");
-          pos += 2;
-        }
-        break;
-      }
       case '{': {
         if (pos + 1 == static_cast<int>(str.size()) || str[pos + 1] != '{') {
           // Single `{`, escape it.
           str.insert(pos, "\\");
           pos += 2;
-        } else {
-          // Replace the `{{...}}` regex syntax with standard `(...)` syntax.
-          str.replace(pos, 2, "(");
-          for (++pos; pos < static_cast<int>(str.size() - 1); ++pos) {
-            if (str[pos] == '}' && str[pos + 1] == '}') {
-              str.replace(pos, 2, ")");
-              ++pos;
-              break;
-            }
+          break;
+        }
+
+        // Replace the `{{...}}` regex syntax with standard `(...)` syntax.
+        str.replace(pos, 2, "(");
+        for (++pos; pos < static_cast<int>(str.size() - 1); ++pos) {
+          if (str[pos] == '}' && str[pos + 1] == '}') {
+            str.replace(pos, 2, ")");
+            ++pos;
+            break;
           }
         }
         break;
@@ -520,21 +769,89 @@ static auto TransformExpectation(int line_index, llvm::StringRef in)
       }
     }
   }
+}
 
+// Transforms an expectation on a given line from `FileCheck` syntax into a
+// standard regex matcher.
+static auto TransformExpectation(int line_index, llvm::StringRef in)
+    -> ErrorOr<Matcher<std::string>> {
+  if (in.empty()) {
+    return Matcher<std::string>{StrEq("")};
+  }
+  if (!in.consume_front(" ")) {
+    return ErrorBuilder() << "Malformated CHECK line: " << in;
+  }
+
+  // Check early if we have a regex component as we can avoid building an
+  // expensive matcher when not using those.
+  bool has_regex = in.find("{{") != llvm::StringRef::npos;
+
+  // Now scan the string and expand any keywords. Note that this needs to be
+  // `size_t` to correctly store `npos`.
+  size_t keyword_pos = in.find("[[");
+
+  // If there are neither keywords nor regex sequences, we can match the
+  // incoming string directly.
+  if (!has_regex && keyword_pos == llvm::StringRef::npos) {
+    return Matcher<std::string>{StrEq(in)};
+  }
+
+  std::string str = in.str();
+
+  // First expand the keywords.
+  while (keyword_pos != std::string::npos) {
+    llvm::StringRef line_keyword_cursor =
+        llvm::StringRef(str).substr(keyword_pos);
+    CARBON_CHECK(line_keyword_cursor.consume_front("[["));
+
+    static constexpr llvm::StringLiteral LineKeyword = "@LINE";
+    if (!line_keyword_cursor.consume_front(LineKeyword)) {
+      return ErrorBuilder()
+             << "Unexpected [[, should be {{\\[\\[}} at `"
+             << line_keyword_cursor.substr(0, 5) << "` in: " << in;
+    }
+
+    // Allow + or - here; consumeInteger handles -.
+    line_keyword_cursor.consume_front("+");
+    int offset;
+    // consumeInteger returns true for errors, not false.
+    if (line_keyword_cursor.consumeInteger(10, offset) ||
+        !line_keyword_cursor.consume_front("]]")) {
+      return ErrorBuilder()
+             << "Unexpected @LINE offset at `"
+             << line_keyword_cursor.substr(0, 5) << "` in: " << in;
+    }
+    std::string int_str = llvm::Twine(line_index + offset).str();
+    int remove_len = (line_keyword_cursor.data() - str.data()) - keyword_pos;
+    str.replace(keyword_pos, remove_len, int_str);
+    keyword_pos += int_str.size();
+    // Find the next keyword start or the end of the string.
+    keyword_pos = str.find("[[", keyword_pos);
+  }
+
+  // If there was no regex, we can directly match the adjusted string.
+  if (!has_regex) {
+    return Matcher<std::string>{StrEq(str)};
+  }
+
+  // Otherwise, we need to turn the entire string into a regex by escaping
+  // things outside the regex region and transforming the regex region into a
+  // normal syntax.
+  ConvertExpectationStringToRegex(str);
   return Matcher<std::string>{MatchesRegex(str)};
 }
 
 // Once all content is processed, do any remaining split processing.
 static auto FinishSplit(llvm::StringRef test_name, SplitState* split,
                         llvm::SmallVector<FileTestBase::TestFile>* test_files)
-    -> void {
+    -> ErrorOr<Success> {
   if (split->has_splits()) {
-    AddTestFile(split->filename, &split->content, test_files);
+    return AddTestFile(split->filename, &split->content, test_files);
   } else {
     // If no file splitting happened, use the main file as the test file.
     // There will always be a `/` unless tests are in the repo root.
-    AddTestFile(test_name.drop_front(test_name.rfind("/") + 1), &split->content,
-                test_files);
+    return AddTestFile(test_name.drop_front(test_name.rfind("/") + 1),
+                       &split->content, test_files);
   }
 }
 
@@ -566,16 +883,23 @@ static auto TryConsumeCheck(
   return true;
 }
 
-// Processes ARGS lines when found. Returns true if the line is consumed.
+// Processes ARGS and EXTRA-ARGS lines when found. Returns true if the line is
+// consumed.
 static auto TryConsumeArgs(llvm::StringRef line, llvm::StringRef line_trimmed,
-                           llvm::SmallVector<std::string>* args)
+                           llvm::SmallVector<std::string>* args,
+                           llvm::SmallVector<std::string>* extra_args)
     -> ErrorOr<bool> {
-  if (!line_trimmed.consume_front("// ARGS: ")) {
+  llvm::SmallVector<std::string>* arg_list = nullptr;
+  if (line_trimmed.consume_front("// ARGS: ")) {
+    arg_list = args;
+  } else if (line_trimmed.consume_front("// EXTRA-ARGS: ")) {
+    arg_list = extra_args;
+  } else {
     return false;
   }
 
-  if (!args->empty()) {
-    return ErrorBuilder() << "ARGS was specified multiple times: "
+  if (!args->empty() || !extra_args->empty()) {
+    return ErrorBuilder() << "ARGS / EXTRA-ARGS specified multiple times: "
                           << line.str();
   }
 
@@ -583,7 +907,7 @@ static auto TryConsumeArgs(llvm::StringRef line, llvm::StringRef line_trimmed,
   std::pair<llvm::StringRef, llvm::StringRef> cursor =
       llvm::getToken(line_trimmed);
   while (!cursor.first.empty()) {
-    args->push_back(std::string(cursor.first));
+    arg_list->push_back(std::string(cursor.first));
     cursor = llvm::getToken(cursor.second);
   }
 
@@ -610,17 +934,17 @@ static auto TryConsumeAutoupdate(int line_index, llvm::StringRef line_trimmed,
   return true;
 }
 
-// Processes SET-CHECK-SUBSET lines when found. Returns true if the line is
-// consumed.
-static auto TryConsumeSetCheckSubset(llvm::StringRef line_trimmed,
-                                     bool* check_subset) -> ErrorOr<bool> {
-  if (line_trimmed != "// SET-CHECK-SUBSET") {
+// Processes SET-* lines when found. Returns true if the line is consumed.
+static auto TryConsumeSetFlag(llvm::StringRef line_trimmed,
+                              llvm::StringLiteral flag_name, bool* flag)
+    -> ErrorOr<bool> {
+  if (!line_trimmed.consume_front("// ") || line_trimmed != flag_name) {
     return false;
   }
-  if (*check_subset) {
-    return ErrorBuilder() << "SET-CHECK-SUBSET was specified multiple times";
+  if (*flag) {
+    return ErrorBuilder() << flag_name << " was specified multiple times";
   }
-  *check_subset = true;
+  *flag = true;
   return true;
 }
 
@@ -665,6 +989,11 @@ auto FileTestBase::ProcessTestFile(TestContext& context) -> ErrorOr<Success> {
 
     ++line_index;
 
+    // TIP lines have no impact on validation.
+    if (line_trimmed.starts_with("// TIP:")) {
+      continue;
+    }
+
     CARBON_ASSIGN_OR_RETURN(
         is_consumed,
         TryConsumeCheck(line_index, line, line_trimmed,
@@ -678,7 +1007,8 @@ auto FileTestBase::ProcessTestFile(TestContext& context) -> ErrorOr<Success> {
         FileTestLine(split.file_index, line_index, line));
 
     CARBON_ASSIGN_OR_RETURN(
-        is_consumed, TryConsumeArgs(line, line_trimmed, &context.test_args));
+        is_consumed, TryConsumeArgs(line, line_trimmed, &context.test_args,
+                                    &context.extra_args));
     if (is_consumed) {
       continue;
     }
@@ -691,18 +1021,43 @@ auto FileTestBase::ProcessTestFile(TestContext& context) -> ErrorOr<Success> {
     }
     CARBON_ASSIGN_OR_RETURN(
         is_consumed,
-        TryConsumeSetCheckSubset(line_trimmed, &context.check_subset));
+        TryConsumeSetFlag(line_trimmed, "SET-CAPTURE-CONSOLE-OUTPUT",
+                          &context.capture_console_output));
+    if (is_consumed) {
+      continue;
+    }
+    CARBON_ASSIGN_OR_RETURN(is_consumed,
+                            TryConsumeSetFlag(line_trimmed, "SET-CHECK-SUBSET",
+                                              &context.check_subset));
     if (is_consumed) {
       continue;
     }
   }
 
   if (!found_autoupdate) {
-    return ErrorBuilder() << "Missing AUTOUPDATE/NOAUTOUPDATE setting";
+    return Error("Missing AUTOUPDATE/NOAUTOUPDATE setting");
   }
 
   context.has_splits = split.has_splits();
-  FinishSplit(test_name_, &split, &context.test_files);
+  CARBON_RETURN_IF_ERROR(FinishSplit(test_name_, &split, &context.test_files));
+
+  // Validate AUTOUPDATE-SPLIT use, and remove it from test files if present.
+  if (context.has_splits) {
+    constexpr llvm::StringLiteral AutoupdateSplit = "AUTOUPDATE-SPLIT";
+    for (const auto& test_file :
+         llvm::ArrayRef(context.test_files).drop_back()) {
+      if (test_file.filename == AutoupdateSplit) {
+        return Error("AUTOUPDATE-SPLIT must be the last split");
+      }
+    }
+    if (context.test_files.back().filename == AutoupdateSplit) {
+      if (!context.autoupdate_line_number) {
+        return Error("AUTOUPDATE-SPLIT requires AUTOUPDATE");
+      }
+      context.autoupdate_split = true;
+      context.test_files.pop_back();
+    }
+  }
 
   // Assume there is always a suffix `\n` in output.
   if (!context.expected_stdout.empty()) {
@@ -725,17 +1080,75 @@ static auto GetTests() -> llvm::SmallVector<std::string> {
   }
 
   // Extracts tests from the target file.
-  CARBON_CHECK(!absl::GetFlag(FLAGS_test_targets_file).empty())
-      << "Missing --test_targets_file.";
+  CARBON_CHECK(!absl::GetFlag(FLAGS_test_targets_file).empty(),
+               "Missing --test_targets_file.");
   auto content = ReadFile(absl::GetFlag(FLAGS_test_targets_file));
+  CARBON_CHECK(content.ok(), "{0}", content.error());
   llvm::SmallVector<std::string> all_tests;
-  for (llvm::StringRef file_ref : llvm::split(content, "\n")) {
+  for (llvm::StringRef file_ref : llvm::split(*content, "\n")) {
     if (file_ref.empty()) {
       continue;
     }
     all_tests.push_back(file_ref.str());
   }
   return all_tests;
+}
+
+// Runs autoupdate for the given tests. This is multi-threaded to try to get a
+// little extra speed.
+static auto RunAutoupdate(llvm::StringRef exe_path,
+                          llvm::ArrayRef<std::string> tests,
+                          FileTestFactory& test_factory) -> int {
+  llvm::CrashRecoveryContext::Enable();
+  llvm::DefaultThreadPool pool(
+      {.ThreadsRequested = absl::GetFlag(FLAGS_threads)});
+
+  // Guard access to both `llvm::errs` and `crashed`.
+  std::mutex mutex;
+  bool crashed = false;
+
+  for (const auto& test_name : tests) {
+    pool.async([&test_factory, &mutex, &exe_path, &crashed, test_name] {
+      // If any thread crashed, don't try running more.
+      {
+        std::unique_lock<std::mutex> lock(mutex);
+        if (crashed) {
+          return;
+        }
+      }
+
+      // Use a crash recovery context to try to get a stack trace when
+      // multiple threads may crash in parallel, which otherwise leads to the
+      // program aborting without printing a stack trace.
+      llvm::CrashRecoveryContext crc;
+      crc.DumpStackAndCleanupOnFailure = true;
+      bool thread_crashed = !crc.RunSafely([&] {
+        std::unique_ptr<FileTestBase> test(
+            test_factory.factory_fn(exe_path, &mutex, test_name));
+        auto result = test->Autoupdate();
+
+        std::unique_lock<std::mutex> lock(mutex);
+        if (result.ok()) {
+          llvm::errs() << (*result ? "!" : ".");
+        } else {
+          llvm::errs() << "\n" << result.error().message() << "\n";
+        }
+      });
+      if (thread_crashed) {
+        std::unique_lock<std::mutex> lock(mutex);
+        crashed = true;
+      }
+    });
+  }
+
+  pool.wait();
+  if (crashed) {
+    // Abort rather than returning so that we don't get a LeakSanitizer report.
+    // We expect to have leaked memory if one or more of our tests crashed.
+    std::abort();
+  }
+  llvm::errs() << "\nDone!\n";
+  return EXIT_SUCCESS;
 }
 
 // Implements main() within the Carbon::Testing namespace for convenience.
@@ -753,6 +1166,8 @@ static auto Main(int argc, char** argv) -> int {
     llvm::errs() << "\n";
     return EXIT_FAILURE;
   }
+
+  std::string exe_path = FindExecutablePath(argv[0]);
 
   // Tests might try to read from stdin. Ensure those reads fail by closing
   // stdin and reopening it as /dev/null. Note that STDIN_FILENO doesn't exist
@@ -777,30 +1192,11 @@ static auto Main(int argc, char** argv) -> int {
   llvm::SmallVector<std::string> tests = GetTests();
   auto test_factory = GetFileTestFactory();
   if (absl::GetFlag(FLAGS_autoupdate)) {
-    llvm::DefaultThreadPool pool(
-        {.ThreadsRequested = absl::GetFlag(FLAGS_threads)});
-    std::mutex errs_mutex;
-
-    for (const auto& test_name : tests) {
-      pool.async([&test_factory, &errs_mutex, test_name] {
-        std::unique_ptr<FileTestBase> test(test_factory.factory_fn(test_name));
-        auto result = test->Autoupdate();
-
-        // Guard access to llvm::errs, which is not thread-safe.
-        std::unique_lock<std::mutex> lock(errs_mutex);
-        if (result.ok()) {
-          llvm::errs() << (*result ? "!" : ".");
-        } else {
-          llvm::errs() << "\n" << result.error().message() << "\n";
-        }
-      });
-    }
-    pool.wait();
-    llvm::errs() << "\nDone!\n";
-    return EXIT_SUCCESS;
+    return RunAutoupdate(exe_path, tests, test_factory);
   } else if (absl::GetFlag(FLAGS_dump_output)) {
     for (const auto& test_name : tests) {
-      std::unique_ptr<FileTestBase> test(test_factory.factory_fn(test_name));
+      std::unique_ptr<FileTestBase> test(
+          test_factory.factory_fn(exe_path, nullptr, test_name));
       auto result = test->DumpOutput();
       if (!result.ok()) {
         llvm::errs() << "\n" << result.error().message() << "\n";
@@ -809,12 +1205,13 @@ static auto Main(int argc, char** argv) -> int {
     llvm::errs() << "\nDone!\n";
     return EXIT_SUCCESS;
   } else {
-    for (llvm::StringRef test_name : tests) {
-      testing::RegisterTest(test_factory.name, test_name.data(), nullptr,
-                            test_name.data(), __FILE__, __LINE__,
-                            [&test_factory, test_name = test_name]() {
-                              return test_factory.factory_fn(test_name);
-                            });
+    for (const std::string& test_name : tests) {
+      testing::RegisterTest(
+          test_factory.name, test_name.c_str(), nullptr, test_name.c_str(),
+          __FILE__, __LINE__,
+          [&test_factory, &exe_path, test_name = test_name]() {
+            return test_factory.factory_fn(exe_path, nullptr, test_name);
+          });
     }
     return RUN_ALL_TESTS();
   }

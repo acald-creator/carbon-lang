@@ -30,6 +30,12 @@ class TokenKind : public CARBON_ENUM_BASE(TokenKind) {
 
   using EnumBase::EnumBase;
 
+  // Permit creation from RawEnumType for templates.
+  using EnumBase::Make;
+
+  // Permit conversion to integer for use as an array index.
+  using EnumBase::AsInt;
+
   // Test whether this kind of token is a simple symbol sequence (punctuation,
   // not letters) that appears directly in the source text and can be
   // unambiguously lexed with `starts_with` logic. While these may appear
@@ -50,7 +56,7 @@ class TokenKind : public CARBON_ENUM_BASE(TokenKind) {
   // The token kind must be an opening symbol.
   auto closing_symbol() const -> TokenKind {
     auto result = ClosingSymbol[AsInt()];
-    CARBON_DCHECK(result != Error) << "Only opening symbols are valid!";
+    CARBON_DCHECK(result != Error, "Only opening symbols are valid!");
     return result;
   }
 
@@ -62,33 +68,33 @@ class TokenKind : public CARBON_ENUM_BASE(TokenKind) {
   // The token kind must be a closing symbol.
   auto opening_symbol() const -> TokenKind {
     auto result = OpeningSymbol[AsInt()];
-    CARBON_DCHECK(result != Error) << "Only closing symbols are valid!";
+    CARBON_DCHECK(result != Error, "Only closing symbols are valid!");
     return result;
   }
 
   // Test whether this kind of token is a one-character symbol whose character
   // is not part of any other symbol.
-  auto is_one_char_symbol() const -> bool { return IsOneCharSymbol[AsInt()]; };
+  auto is_one_char_symbol() const -> bool { return IsOneCharSymbol[AsInt()]; }
 
   // Test whether this kind of token is a keyword.
-  auto is_keyword() const -> bool { return IsKeyword[AsInt()]; };
+  auto is_keyword() const -> bool { return IsKeyword[AsInt()]; }
 
   // Test whether this kind of token is a sized type literal.
   auto is_sized_type_literal() const -> bool {
     return *this == TokenKind::IntTypeLiteral ||
            *this == TokenKind::UnsignedIntTypeLiteral ||
            *this == TokenKind::FloatTypeLiteral;
-  };
+  }
 
   // If this token kind has a fixed spelling when in source code, returns it.
   // Otherwise returns an empty string.
   auto fixed_spelling() const -> llvm::StringLiteral {
     return FixedSpelling[AsInt()];
-  };
+  }
 
   // Get the expected number of parse tree nodes that will be created for this
   // token.
-  auto expected_parse_tree_size() const -> int {
+  auto expected_max_parse_tree_size() const -> int {
     return ExpectedParseTreeSize[AsInt()];
   }
 

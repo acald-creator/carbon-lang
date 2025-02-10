@@ -7,14 +7,28 @@
 
 #include <compare>
 #include <concepts>
+#include <iterator>
+#include <type_traits>
 
 #include "common/ostream.h"
-#include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/iterator.h"
 
 namespace Carbon {
 
 template <typename DataType>
 class DataIterator;
+
+// Non-templated portions of `IdBase`.
+struct AnyIdBase {
+  static constexpr int32_t NoneIndex = -1;
+
+  AnyIdBase() = delete;
+  constexpr explicit AnyIdBase(int index) : index(index) {}
+
+  constexpr auto has_value() const -> bool { return index != NoneIndex; }
+
+  int32_t index;
+};
 
 // A lightweight handle to an item identified by an opaque ID.
 //
@@ -25,23 +39,28 @@ class DataIterator;
 // Classes derived from IdBase are designed to be passed by value, not
 // reference or pointer. They are also designed to be small and efficient to
 // store in data structures.
-struct IdBase : public Printable<IdBase> {
-  static constexpr int32_t InvalidIndex = -1;
+//
+// This uses CRTP for the `Print` function. Children should have:
+//   static constexpr llvm::StringLiteral Label = "my_label";
+// Children can also define their own `Print` function, removing the dependency
+// on `Label`.
+template <typename IdT>
+struct IdBase : public AnyIdBase, public Printable<IdT> {
+  using AnyIdBase::AnyIdBase;
 
-  IdBase() = delete;
-  constexpr explicit IdBase(int index) : index(index) {}
-
-  auto Print(llvm::raw_ostream& output) const -> void {
-    if (is_valid()) {
-      output << index;
+  auto Print(llvm::raw_ostream& out) const -> void {
+    out << IdT::Label;
+    if (has_value()) {
+      out << index;
     } else {
-      output << "<invalid>";
+      out << "<none>";
     }
   }
 
-  constexpr auto is_valid() const -> bool { return index != InvalidIndex; }
-
-  int32_t index;
+  // Support simple equality comparison for ID types.
+  friend constexpr auto operator==(IdBase<IdT> lhs, IdBase<IdT> rhs) -> bool {
+    return lhs.index == rhs.index;
+  }
 };
 
 // A lightweight handle to an item that behaves like an index.
@@ -49,55 +68,64 @@ struct IdBase : public Printable<IdBase> {
 // Unlike IdBase, classes derived from IndexBase are not completely opaque, and
 // provide at least an ordering between indexes that has meaning to an API
 // user. Additional semantics may be specified by the derived class.
-struct IndexBase : public IdBase {
-  using IdBase::IdBase;
+template <typename IdT>
+struct IndexBase : public IdBase<IdT> {
+  using IdBase<IdT>::IdBase;
+
+  // Support relational comparisons for index types.
+  friend auto operator<=>(IndexBase<IdT> lhs, IndexBase<IdT> rhs)
+      -> std::strong_ordering {
+    return lhs.index <=> rhs.index;
+  }
 };
 
-// Support equality comparison when one operand is a child of `IdBase`
-// (including `IndexBase`) and the other operand is either the same type or
-// convertible to that type.
-template <typename IndexType>
-  requires std::derived_from<IndexType, IdBase>
-constexpr auto operator==(IndexType lhs, IndexType rhs) -> bool {
-  return lhs.index == rhs.index;
-}
-template <typename IndexType, typename RHSType>
-  requires std::derived_from<IndexType, IdBase> &&
-           std::convertible_to<RHSType, IndexType>
-auto operator==(IndexType lhs, RHSType rhs) -> bool {
-  return lhs.index == IndexType(rhs).index;
-}
+// A random-access iterator for arrays using IndexBase-derived types.
+template <typename IndexT>
+class IndexIterator
+    : public llvm::iterator_facade_base<IndexIterator<IndexT>,
+                                        std::random_access_iterator_tag,
+                                        const IndexT, int>,
+      public Printable<IndexIterator<IndexT>> {
+ public:
+  IndexIterator() = delete;
 
-// Relational comparisons are only supported for types derived from `IndexBase`.
-template <typename IndexType>
-  requires std::derived_from<IndexType, IndexBase>
-auto operator<=>(IndexType lhs, IndexType rhs) -> std::strong_ordering {
-  return lhs.index <=> rhs.index;
-}
+  explicit IndexIterator(IndexT index) : index_(index) {}
 
-// Provides base support for use of IdBase types as DenseMap/DenseSet keys.
-//
-// Usage (in global namespace):
-//   template <>
-//   struct llvm::DenseMapInfo<Carbon::MyType>
-//       : public Carbon::IndexMapInfo<Carbon::MyType> {};
-template <typename Index>
-struct IndexMapInfo {
-  static inline auto getEmptyKey() -> Index {
-    return Index(llvm::DenseMapInfo<int32_t>::getEmptyKey());
+  friend auto operator==(const IndexIterator& lhs, const IndexIterator& rhs)
+      -> bool {
+    return lhs.index_ == rhs.index_;
+  }
+  friend auto operator<=>(const IndexIterator& lhs, const IndexIterator& rhs)
+      -> std::strong_ordering {
+    return lhs.index_ <=> rhs.index_;
   }
 
-  static inline auto getTombstoneKey() -> Index {
-    return Index(llvm::DenseMapInfo<int32_t>::getTombstoneKey());
+  auto operator*() const -> const IndexT& { return index_; }
+
+  using llvm::iterator_facade_base<IndexIterator,
+                                   std::random_access_iterator_tag,
+                                   const IndexT, int>::operator-;
+  friend auto operator-(const IndexIterator& lhs, const IndexIterator& rhs)
+      -> int {
+    return lhs.index_.index - rhs.index_.index;
   }
 
-  static auto getHashValue(const Index& val) -> unsigned {
-    return llvm::DenseMapInfo<int32_t>::getHashValue(val.index);
+  auto operator+=(int n) -> IndexIterator& {
+    index_.index += n;
+    return *this;
+  }
+  auto operator-=(int n) -> IndexIterator& {
+    index_.index -= n;
+    return *this;
   }
 
-  static auto isEqual(const Index& lhs, const Index& rhs) -> bool {
-    return lhs == rhs;
+  // Prints the raw token index.
+  auto Print(llvm::raw_ostream& output) const -> void {
+    output << index_.index;
   }
+
+ private:
+  IndexT index_;
 };
 
 }  // namespace Carbon

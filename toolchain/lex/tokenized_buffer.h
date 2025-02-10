@@ -5,50 +5,26 @@
 #ifndef CARBON_TOOLCHAIN_LEX_TOKENIZED_BUFFER_H_
 #define CARBON_TOOLCHAIN_LEX_TOKENIZED_BUFFER_H_
 
-#include <compare>
 #include <cstdint>
-#include <iterator>
 
 #include "common/ostream.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/raw_ostream.h"
 #include "toolchain/base/index_base.h"
-#include "toolchain/base/value_store.h"
+#include "toolchain/base/mem_usage.h"
+#include "toolchain/base/shared_value_stores.h"
 #include "toolchain/diagnostics/diagnostic_emitter.h"
+#include "toolchain/lex/token_index.h"
 #include "toolchain/lex/token_kind.h"
 #include "toolchain/source/source_buffer.h"
 
 namespace Carbon::Lex {
 
 class TokenizedBuffer;
-
-// A lightweight handle to a lexed token in a `TokenizedBuffer`.
-//
-// `TokenIndex` objects are designed to be passed by value, not reference or
-// pointer. They are also designed to be small and efficient to store in data
-// structures.
-//
-// `TokenIndex` objects from the same `TokenizedBuffer` can be compared with
-// each other, both for being the same token within the buffer, and to establish
-// relative position within the token stream that has been lexed out of the
-// buffer. `TokenIndex` objects from different `TokenizedBuffer`s cannot be
-// meaningfully compared.
-//
-// All other APIs to query a `TokenIndex` are on the `TokenizedBuffer`.
-struct TokenIndex : public IndexBase {
-  static const TokenIndex Invalid;
-  // Comments aren't tokenized, so this is the first token after FileStart.
-  static const TokenIndex FirstNonCommentToken;
-  using IndexBase::IndexBase;
-};
-
-constexpr TokenIndex TokenIndex::Invalid(TokenIndex::InvalidIndex);
-constexpr TokenIndex TokenIndex::FirstNonCommentToken(1);
 
 // A lightweight handle to a lexed line in a `TokenizedBuffer`.
 //
@@ -61,70 +37,28 @@ constexpr TokenIndex TokenIndex::FirstNonCommentToken(1);
 // same line or the relative position of different lines within the source.
 //
 // All other APIs to query a `LineIndex` are on the `TokenizedBuffer`.
-struct LineIndex : public IndexBase {
-  static const LineIndex Invalid;
+struct LineIndex : public IndexBase<LineIndex> {
+  static constexpr llvm::StringLiteral Label = "line";
+  static const LineIndex None;
   using IndexBase::IndexBase;
 };
 
-constexpr LineIndex LineIndex::Invalid(LineIndex::InvalidIndex);
+constexpr LineIndex LineIndex::None(NoneIndex);
+
+// Indices for comments within the buffer.
+struct CommentIndex : public IndexBase<CommentIndex> {
+  static constexpr llvm::StringLiteral Label = "comment";
+  static const CommentIndex None;
+  using IndexBase::IndexBase;
+};
+
+constexpr CommentIndex CommentIndex::None(NoneIndex);
+
+// Random-access iterator over comments within the buffer.
+using CommentIterator = IndexIterator<CommentIndex>;
 
 // Random-access iterator over tokens within the buffer.
-class TokenIterator
-    : public llvm::iterator_facade_base<TokenIterator,
-                                        std::random_access_iterator_tag,
-                                        const TokenIndex, int>,
-      public Printable<TokenIterator> {
- public:
-  TokenIterator() = delete;
-
-  explicit TokenIterator(TokenIndex token) : token_(token) {}
-
-  auto operator==(const TokenIterator& rhs) const -> bool {
-    return token_ == rhs.token_;
-  }
-  auto operator<=>(const TokenIterator& rhs) const -> std::strong_ordering {
-    return token_ <=> rhs.token_;
-  }
-
-  auto operator*() const -> const TokenIndex& { return token_; }
-
-  using iterator_facade_base::operator-;
-  auto operator-(const TokenIterator& rhs) const -> int {
-    return token_.index - rhs.token_.index;
-  }
-
-  auto operator+=(int n) -> TokenIterator& {
-    token_.index += n;
-    return *this;
-  }
-  auto operator-=(int n) -> TokenIterator& {
-    token_.index -= n;
-    return *this;
-  }
-
-  // Prints the raw token index.
-  auto Print(llvm::raw_ostream& output) const -> void;
-
- private:
-  friend class TokenizedBuffer;
-
-  TokenIndex token_;
-};
-
-// A diagnostic location translator that maps token locations into source
-// buffer locations.
-class TokenLocationTranslator
-    : public DiagnosticLocationTranslator<TokenIndex> {
- public:
-  explicit TokenLocationTranslator(const TokenizedBuffer* buffer)
-      : buffer_(buffer) {}
-
-  // Map the given token into a diagnostic location.
-  auto GetLocation(TokenIndex token) -> DiagnosticLocation override;
-
- private:
-  const TokenizedBuffer* buffer_;
-};
+using TokenIterator = IndexIterator<TokenIndex>;
 
 // A buffer of tokenized Carbon source code.
 //
@@ -136,6 +70,21 @@ class TokenLocationTranslator
 // `HasError` returning true.
 class TokenizedBuffer : public Printable<TokenizedBuffer> {
  public:
+  // A comment, which can be a block of lines.
+  //
+  // This is the API version of `CommentData`.
+  struct CommentInfo {
+    // The comment's full text, including `//` symbols. This may have several
+    // lines for block comments.
+    llvm::StringRef text;
+
+    // The comment's indent.
+    int32_t indent;
+
+    // The first line of the comment.
+    LineIndex start_line;
+  };
+
   auto GetKind(TokenIndex token) const -> TokenKind;
   auto GetLine(TokenIndex token) const -> LineIndex;
 
@@ -147,7 +96,7 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
 
   // Returns the line and 1-based column number of the first character after
   // this token.
-  auto GetEndLocation(TokenIndex token) const -> std::pair<LineIndex, int>;
+  auto GetEndLoc(TokenIndex token) const -> std::pair<LineIndex, int>;
 
   // Returns the source text lexed into this token.
   auto GetTokenText(TokenIndex token) const -> llvm::StringRef;
@@ -166,7 +115,7 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
   auto GetStringLiteralValue(TokenIndex token) const -> StringLiteralValueId;
 
   // Returns the size specified in a `*TypeLiteral()` token.
-  auto GetTypeLiteralSize(TokenIndex token) const -> const llvm::APInt&;
+  auto GetTypeLiteralSize(TokenIndex token) const -> IntId;
 
   // Returns the closing token matched with the given opening token.
   //
@@ -188,9 +137,6 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
   // For example, a closing paren inserted to match an unmatched paren.
   auto IsRecoveryToken(TokenIndex token) const -> bool;
 
-  // Returns the 1-based line number.
-  auto GetLineNumber(LineIndex line) const -> int;
-
   // Returns the 1-based indentation column number.
   auto GetIndentColumnNumber(LineIndex line) const -> int;
 
@@ -200,31 +146,38 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
   // Returns the previous line handle.
   auto GetPrevLine(LineIndex line) const -> LineIndex;
 
-  // Prints a description of the tokenized stream to the provided `raw_ostream`.
+  auto GetByteOffset(TokenIndex token) const -> int32_t {
+    return GetTokenInfo(token).byte_offset();
+  }
+
+  // Returns true if the token comes after the comment.
+  auto IsAfterComment(TokenIndex token, CommentIndex comment_index) const
+      -> bool;
+
+  // Returns the comment's full text range.
+  auto GetCommentText(CommentIndex comment_index) const -> llvm::StringRef;
+
+  // Returns tokens as YAML. This prints the tracked token information on a
+  // single line for each token. We use the single-line format so that output is
+  // compact, and so that tools like `grep` are compatible.
   //
-  // It prints one line of information for each token in the buffer, including
-  // the kind of token, where it occurs within the source file, indentation for
-  // the associated line, the spelling of the token in source, and any
-  // additional information tracked such as which unique identifier it is or any
-  // matched grouping token.
+  // An example token looks like:
   //
-  // Each line is formatted as a YAML record:
-  //
-  // clang-format off
-  // ```
-  // token: { index: 0, kind: 'Semi', line: 1, column: 1, indent: 1, spelling: ';' }
-  // ```
-  // clang-format on
-  //
-  // This can be parsed as YAML using tools like `python-yq` combined with `jq`
-  // on the command line. The format is also reasonably amenable to other
-  // line-oriented shell tools from `grep` to `awk`.
-  auto Print(llvm::raw_ostream& output_stream) const -> void;
+  // - { index: 1, kind: 'Semi', line: 1, column: 1, indent: 1, spelling: ';' }
+  auto Print(llvm::raw_ostream& out,
+             bool omit_file_boundary_tokens = false) const -> void;
 
   // Prints a description of a single token.  See `Print` for details on the
   // format.
   auto PrintToken(llvm::raw_ostream& output_stream, TokenIndex token) const
       -> void;
+
+  // Collects memory usage of members.
+  auto CollectMemUsage(MemUsage& mem_usage, llvm::StringRef label) const
+      -> void;
+
+  // Converts a token to a diagnostic location.
+  auto TokenToDiagnosticLoc(TokenIndex token) const -> ConvertedDiagnosticLoc;
 
   // Returns true if the buffer has errors that were detected at lexing time.
   auto has_errors() const -> bool { return has_errors_; }
@@ -236,31 +189,59 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
 
   auto size() const -> int { return token_infos_.size(); }
 
-  auto expected_parse_tree_size() const -> int {
-    return expected_parse_tree_size_;
+  auto comments() const -> llvm::iterator_range<CommentIterator> {
+    return llvm::make_range(CommentIterator(CommentIndex(0)),
+                            CommentIterator(CommentIndex(comments_.size())));
+  }
+
+  auto comments_size() const -> size_t { return comments_.size(); }
+
+  // This is an upper bound on the number of output parse nodes in the absence
+  // of errors.
+  auto expected_max_parse_tree_size() const -> int {
+    return expected_max_parse_tree_size_;
   }
 
   auto source() const -> const SourceBuffer& { return *source_; }
 
  private:
   friend class Lexer;
-  friend class TokenLocationTranslator;
 
-  // A diagnostic location translator that maps token locations into source
-  // buffer locations.
-  class SourceBufferLocationTranslator
-      : public DiagnosticLocationTranslator<const char*> {
+  class SourcePointerDiagnosticEmitter : public DiagnosticEmitter<const char*> {
    public:
-    explicit SourceBufferLocationTranslator(const TokenizedBuffer* buffer)
-        : buffer_(buffer) {}
+    explicit SourcePointerDiagnosticEmitter(DiagnosticConsumer* consumer,
+                                            const TokenizedBuffer* tokens)
+        : DiagnosticEmitter(consumer), tokens_(tokens) {}
 
-    // Map the given position within the source buffer into a diagnostic
-    // location.
-    auto GetLocation(const char* loc) -> DiagnosticLocation override;
+   protected:
+    auto ConvertLoc(const char* loc, ContextFnT /*context_fn*/) const
+        -> ConvertedDiagnosticLoc override {
+      return tokens_->SourcePointerToDiagnosticLoc(loc);
+    }
 
    private:
-    const TokenizedBuffer* buffer_;
+    const TokenizedBuffer* tokens_;
   };
+
+  class TokenDiagnosticEmitter : public DiagnosticEmitter<TokenIndex> {
+   public:
+    explicit TokenDiagnosticEmitter(DiagnosticConsumer* consumer,
+                                    const TokenizedBuffer* tokens)
+        : DiagnosticEmitter(consumer), tokens_(tokens) {}
+
+   protected:
+    auto ConvertLoc(TokenIndex token, ContextFnT /*context_fn*/) const
+        -> ConvertedDiagnosticLoc override {
+      return tokens_->TokenToDiagnosticLoc(token);
+    }
+
+   private:
+    const TokenizedBuffer* tokens_;
+  };
+
+  // Converts a pointer into the source to a diagnostic location.
+  auto SourcePointerToDiagnosticLoc(const char* loc) const
+      -> ConvertedDiagnosticLoc;
 
   // Specifies minimum widths to use when printing a token's fields via
   // `printToken`.
@@ -276,55 +257,187 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
     int indent;
   };
 
-  struct TokenInfo {
-    TokenKind kind;
+  // Storage for the information about a specific token in the buffer.
+  //
+  // This provides a friendly accessor API to the carefully space-optimized
+  // storage model of the information we associated with each token.
+  //
+  // There are four pieces of information stored here:
+  // - The kind of the token.
+  // - Whether that token has leading whitespace before it.
+  // - A kind-specific payload that can be compressed into a small integer.
+  //   - This class provides dedicated accessors for each different form of
+  //     payload that check the kind and payload correspond correctly.
+  // - A 32-bit byte offset of the token within the source text.
+  //
+  // These are compressed and stored in 8-bytes for each token.
+  //
+  // Note that while the class provides some limited setters for payloads and
+  // mutating methods, setters on this type may be unexpectedly expensive due to
+  // the bit-packed representation and should be avoided. As such, only the
+  // minimal necessary setters are provided.
+  //
+  // TODO: It might be worth considering a struct-of-arrays data layout in order
+  // to move the byte offset to a separate array from the rest as it is only hot
+  // during lexing, and then cold during parsing and semantic analysis. However,
+  // a trivial approach to that adds more overhead than it saves due to tracking
+  // two separate vectors and their growth. Making this profitable would likely
+  // at least require a highly specialized single vector that manages the growth
+  // once and then provides separate storage areas for the two arrays.
+  class TokenInfo {
+   public:
+    // The kind for this token.
+    auto kind() const -> TokenKind { return kind_; }
 
-    // Whether the token has trailing whitespace.
-    bool has_trailing_space = false;
+    // Whether this token is preceded by whitespace. We only store the preceding
+    // state, and look at the next token to check for trailing whitespace.
+    auto has_leading_space() const -> bool { return has_leading_space_; }
 
-    // Whether the token was injected artificially during error recovery.
-    bool is_recovery = false;
+    // A collection of methods to access the specific payload included with
+    // particular kinds of tokens. Only the specific payload accessor below may
+    // be used for an info entry of a token with a particular kind, and these
+    // check that the kind is valid. Some tokens do not include a payload at all
+    // and none of these methods may be called.
+    auto ident_id() const -> IdentifierId {
+      CARBON_DCHECK(kind() == TokenKind::Identifier);
+      return IdentifierId(token_payload_);
+    }
+    auto set_ident_id(IdentifierId ident_id) -> void {
+      CARBON_DCHECK(kind() == TokenKind::Identifier);
+      token_payload_ = ident_id.index;
+    }
 
-    // LineIndex on which the TokenIndex starts.
-    LineIndex token_line;
+    auto string_literal_id() const -> StringLiteralValueId {
+      CARBON_DCHECK(kind() == TokenKind::StringLiteral);
+      return StringLiteralValueId(token_payload_);
+    }
 
-    // Zero-based byte offset of the token within its line.
-    int32_t column;
+    auto int_id() const -> IntId {
+      CARBON_DCHECK(kind() == TokenKind::IntLiteral ||
+                    kind() == TokenKind::IntTypeLiteral ||
+                    kind() == TokenKind::UnsignedIntTypeLiteral ||
+                    kind() == TokenKind::FloatTypeLiteral);
+      return IntId::MakeFromTokenPayload(token_payload_);
+    }
 
-    // We may have up to 32 bits of payload, based on the kind of token.
-    union {
-      static_assert(
-          sizeof(TokenIndex) <= sizeof(int32_t),
-          "Unable to pack token and identifier index into the same space!");
+    auto real_id() const -> RealId {
+      CARBON_DCHECK(kind() == TokenKind::RealLiteral);
+      return RealId(token_payload_);
+    }
 
-      IdentifierId ident_id = IdentifierId::Invalid;
-      StringLiteralValueId string_literal_id;
-      IntId int_id;
-      RealId real_id;
-      TokenIndex closing_token;
-      TokenIndex opening_token;
-      int32_t error_length;
-    };
+    auto closing_token_index() const -> TokenIndex {
+      CARBON_DCHECK(kind().is_opening_symbol());
+      return TokenIndex(token_payload_);
+    }
+    auto set_closing_token_index(TokenIndex closing_index) -> void {
+      CARBON_DCHECK(kind().is_opening_symbol());
+      token_payload_ = closing_index.index;
+    }
+
+    auto opening_token_index() const -> TokenIndex {
+      CARBON_DCHECK(kind().is_closing_symbol());
+      return TokenIndex(token_payload_);
+    }
+    auto set_opening_token_index(TokenIndex opening_index) -> void {
+      CARBON_DCHECK(kind().is_closing_symbol());
+      token_payload_ = opening_index.index;
+    }
+
+    auto error_length() const -> int {
+      CARBON_DCHECK(kind() == TokenKind::Error);
+      return token_payload_;
+    }
+
+    // Zero-based byte offset of the token within the file. This can be combined
+    // with the buffer's line information to locate the line and column of the
+    // token as well.
+    auto byte_offset() const -> int32_t { return byte_offset_; }
+
+    // Transforms the token into an error token of the given length but at its
+    // original position and with the same whitespace adjacency.
+    auto ResetAsError(int error_length) -> void {
+      // Construct a fresh token to establish any needed invariants and replace
+      // this token with it.
+      TokenInfo error(TokenKind::Error, has_leading_space(), error_length,
+                      byte_offset());
+      *this = error;
+    }
+
+   private:
+    friend class Lexer;
+
+    static constexpr int PayloadBits = 23;
+
+    // Make sure we have enough payload bits to represent token-associated IDs.
+    static_assert(PayloadBits >= IntId::TokenIdBits);
+    static_assert(PayloadBits >= TokenIndex::Bits);
+
+    // Constructor for a TokenKind that carries no payload, or where the payload
+    // will be set later.
+    //
+    // Only used by the lexer which enforces only the correct kinds are used.
+    //
+    // When the payload is not being set, we leave it uninitialized. At least in
+    // some cases, this will allow MSan to correctly detect erroneous attempts
+    // to access the payload, as it works to track uninitialized memory
+    // bit-for-bit specifically to handle complex cases like bitfields.
+    TokenInfo(TokenKind kind, bool has_leading_space, int32_t byte_offset)
+        : kind_(kind),
+          has_leading_space_(has_leading_space),
+          byte_offset_(byte_offset) {}
+
+    // Constructor for a TokenKind that carries a payload.
+    //
+    // Only used by the lexer which enforces the correct kind and payload types.
+    TokenInfo(TokenKind kind, bool has_leading_space, int payload,
+              int32_t byte_offset)
+        : kind_(kind),
+          has_leading_space_(has_leading_space),
+          token_payload_(payload),
+          byte_offset_(byte_offset) {}
+
+    // A bitfield that encodes the token's kind, the leading space flag, and the
+    // remaining bits in a payload. These are encoded together as a bitfield for
+    // density and because these are the hottest fields of tokens for consumers
+    // after lexing.
+    //
+    // Payload values are typically ID types for which we create at most one per
+    // token, so we ensure that `token_payload_` is large enough to fit any
+    // token index. Stores to this field may overflow, but we produce an error
+    // in `Lexer::Finalize` if the file has more than `TokenIndex::Max` tokens,
+    // so this value never overflows if lexing succeeds.
+    TokenKind kind_;
+    static_assert(sizeof(kind_) == 1, "TokenKind must pack to 8 bits");
+    bool has_leading_space_ : 1;
+    unsigned token_payload_ : PayloadBits;
+
+    // Separate storage for the byte offset, this is hot while lexing but then
+    // generally cold.
+    int32_t byte_offset_;
+  };
+  static_assert(sizeof(TokenInfo) == 8,
+                "Expected `TokenInfo` to pack to an 8-byte structure.");
+
+  // A comment, which can be a block of lines. These are tracked separately from
+  // tokens because they don't affect parse; if they were part of tokens, we'd
+  // need more general special-casing within token logic.
+  //
+  // Note that `CommentInfo` is used for an API to expose the comment.
+  struct CommentData {
+    // Zero-based byte offset of the start of the comment within the source
+    // buffer provided.
+    int32_t start;
+
+    // The comment's length.
+    int32_t length;
   };
 
   struct LineInfo {
-    // The length will always be assigned later. Indent may be assigned if
-    // non-zero.
-    explicit LineInfo(int64_t start)
-        : start(start),
-          length(static_cast<int32_t>(llvm::StringRef::npos)),
-          indent(0) {}
-
-    explicit LineInfo(int64_t start, int32_t length)
-        : start(start), length(length), indent(0) {}
+    explicit LineInfo(int32_t start) : start(start), indent(0) {}
 
     // Zero-based byte offset of the start of the line within the source buffer
     // provided.
-    int64_t start;
-
-    // The byte length of the line. Does not include the newline character (or a
-    // nul-terminator or EOF).
-    int32_t length;
+    int32_t start;
 
     // The byte offset from the start of the line of the first non-whitespace
     // character.
@@ -338,6 +451,7 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
                            SourceBuffer& source)
       : value_stores_(&value_stores), source_(&source) {}
 
+  auto FindLineIndex(int32_t byte_offset) const -> LineIndex;
   auto GetLineInfo(LineIndex line) -> LineInfo&;
   auto GetLineInfo(LineIndex line) const -> const LineInfo&;
   auto AddLine(LineInfo info) -> LineIndex;
@@ -347,6 +461,10 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
   auto GetTokenPrintWidths(TokenIndex token) const -> PrintWidths;
   auto PrintToken(llvm::raw_ostream& output_stream, TokenIndex token,
                   PrintWidths widths) const -> void;
+
+  // Adds a comment. This uses the indent to potentially stitch together two
+  // adjacent comments.
+  auto AddComment(int32_t indent, int32_t start, int32_t end) -> void;
 
   // Used to allocate computed string literals.
   llvm::BumpPtrAllocator allocator_;
@@ -358,23 +476,52 @@ class TokenizedBuffer : public Printable<TokenizedBuffer> {
 
   llvm::SmallVector<LineInfo> line_infos_;
 
-  // Stores the computed value of string literals so that StringRefs are
-  // durable.
-  llvm::SmallVector<std::unique_ptr<std::string>> computed_strings_;
+  // Comments in the file.
+  llvm::SmallVector<CommentData> comments_;
 
-  // The number of parse tree nodes that we expect to be created for the tokens
-  // in this buffer.
-  int expected_parse_tree_size_ = 0;
+  // An upper bound on the number of parse tree nodes that we expect to be
+  // created for the tokens in this buffer.
+  int expected_max_parse_tree_size_ = 0;
 
   bool has_errors_ = false;
+
+  // A vector of flags for recovery tokens. If empty, there are none. When doing
+  // token recovery, this will be extended to be indexable by token indices and
+  // contain true for the tokens that were synthesized for recovery.
+  llvm::BitVector recovery_tokens_;
 };
 
-// A diagnostic emitter that uses positions within a source buffer's text as
-// its source of location information.
-using LexerDiagnosticEmitter = DiagnosticEmitter<const char*>;
+inline auto TokenizedBuffer::GetKind(TokenIndex token) const -> TokenKind {
+  return GetTokenInfo(token).kind();
+}
 
-// A diagnostic emitter that uses tokens as its source of location information.
-using TokenDiagnosticEmitter = DiagnosticEmitter<TokenIndex>;
+inline auto TokenizedBuffer::HasLeadingWhitespace(TokenIndex token) const
+    -> bool {
+  return GetTokenInfo(token).has_leading_space();
+}
+
+inline auto TokenizedBuffer::HasTrailingWhitespace(TokenIndex token) const
+    -> bool {
+  TokenIterator it(token);
+  ++it;
+  return it != tokens().end() && GetTokenInfo(*it).has_leading_space();
+}
+
+inline auto TokenizedBuffer::GetTokenInfo(TokenIndex token) -> TokenInfo& {
+  return token_infos_[token.index];
+}
+
+inline auto TokenizedBuffer::GetTokenInfo(TokenIndex token) const
+    -> const TokenInfo& {
+  return token_infos_[token.index];
+}
+
+inline auto TokenizedBuffer::AddToken(TokenInfo info) -> TokenIndex {
+  TokenIndex index(token_infos_.size());
+  token_infos_.push_back(info);
+  expected_max_parse_tree_size_ += info.kind().expected_max_parse_tree_size();
+  return index;
+}
 
 }  // namespace Carbon::Lex
 

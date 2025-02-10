@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 
@@ -10,11 +11,6 @@ auto HandleStatement(Context& context) -> void {
   context.PopAndDiscardState();
 
   switch (context.PositionKind()) {
-    case Lex::TokenKind::Alias: {
-      context.PushState(State::Alias);
-      context.AddLeafNode(NodeKind::AliasIntroducer, context.Consume());
-      break;
-    }
     case Lex::TokenKind::Break: {
       context.PushState(State::StatementBreakFinish);
       context.AddLeafNode(NodeKind::BreakStatementStart, context.Consume());
@@ -35,22 +31,13 @@ auto HandleStatement(Context& context) -> void {
       context.PushState(State::StatementIf);
       break;
     }
-    case Lex::TokenKind::Let: {
-      context.PushState(State::Let);
-      context.AddLeafNode(NodeKind::LetIntroducer, context.Consume());
-      break;
-    }
     case Lex::TokenKind::Return: {
       context.PushState(State::StatementReturn);
       break;
     }
     case Lex::TokenKind::Returned: {
+      // TODO: Consider handling this as a modifier.
       context.PushState(State::VarAsReturned);
-      break;
-    }
-    case Lex::TokenKind::Var: {
-      context.PushState(State::VarAsDecl);
-      context.AddLeafNode(NodeKind::VariableIntroducer, context.Consume());
       break;
     }
     case Lex::TokenKind::While: {
@@ -59,6 +46,27 @@ auto HandleStatement(Context& context) -> void {
     }
     case Lex::TokenKind::Match: {
       context.PushState(State::MatchIntroducer);
+      break;
+    }
+#define CARBON_PARSE_NODE_KIND(...)
+#define CARBON_PARSE_NODE_KIND_TOKEN_MODIFIER(Name, ...) \
+  case Lex::TokenKind::Name:
+#include "toolchain/parse/node_kind.def"
+    case Lex::TokenKind::Adapt:
+    case Lex::TokenKind::Alias:
+    case Lex::TokenKind::Choice:
+    case Lex::TokenKind::Class:
+    case Lex::TokenKind::Constraint:
+    case Lex::TokenKind::Fn:
+    case Lex::TokenKind::Import:
+    case Lex::TokenKind::Interface:
+    case Lex::TokenKind::Let:
+    case Lex::TokenKind::Library:
+    case Lex::TokenKind::Namespace:
+    // We intentionally don't handle Package here, because `package.` can be
+    // used at the start of an expression, and it's not worth disambiguating it.
+    case Lex::TokenKind::Var: {
+      context.PushState(State::Decl);
       break;
     }
     default: {
@@ -77,14 +85,14 @@ static auto HandleStatementKeywordFinish(Context& context, NodeKind node_kind)
   auto semi = context.ConsumeIf(Lex::TokenKind::Semi);
   if (!semi) {
     CARBON_DIAGNOSTIC(ExpectedStatementSemi, Error,
-                      "`{0}` statements must end with a `;`.", Lex::TokenKind);
+                      "`{0}` statements must end with a `;`", Lex::TokenKind);
     context.emitter().Emit(*context.position(), ExpectedStatementSemi,
                            context.tokens().GetKind(state.token));
     state.has_error = true;
     // Recover to the next semicolon if possible.
     semi = context.SkipPastLikelyEnd(state.token);
   }
-  context.AddNode(node_kind, *semi, state.subtree_start, state.has_error);
+  context.AddNode(node_kind, *semi, state.has_error);
 }
 
 auto HandleStatementBreakFinish(Context& context) -> void {
@@ -111,7 +119,7 @@ auto HandleStatementForHeader(Context& context) -> void {
     context.AddLeafNode(NodeKind::VariableIntroducer, context.Consume());
   } else {
     CARBON_DIAGNOSTIC(ExpectedVariableDecl, Error,
-                      "Expected `var` declaration.");
+                      "expected `var` declaration");
     context.emitter().Emit(*context.position(), ExpectedVariableDecl);
 
     if (auto next_in = context.FindNextOf({Lex::TokenKind::In})) {
@@ -140,8 +148,7 @@ auto HandleStatementForHeaderFinish(Context& context) -> void {
 auto HandleStatementForFinish(Context& context) -> void {
   auto state = context.PopState();
 
-  context.AddNode(NodeKind::ForStatement, state.token, state.subtree_start,
-                  state.has_error);
+  context.AddNode(NodeKind::ForStatement, state.token, state.has_error);
 }
 
 auto HandleStatementIf(Context& context) -> void {
@@ -169,15 +176,13 @@ auto HandleStatementIfThenBlockFinish(Context& context) -> void {
                           ? State::StatementIf
                           : State::CodeBlock);
   } else {
-    context.AddNode(NodeKind::IfStatement, state.token, state.subtree_start,
-                    state.has_error);
+    context.AddNode(NodeKind::IfStatement, state.token, state.has_error);
   }
 }
 
 auto HandleStatementIfElseBlockFinish(Context& context) -> void {
   auto state = context.PopState();
-  context.AddNode(NodeKind::IfStatement, state.token, state.subtree_start,
-                  state.has_error);
+  context.AddNode(NodeKind::IfStatement, state.token, state.has_error);
 }
 
 auto HandleStatementReturn(Context& context) -> void {
@@ -233,8 +238,7 @@ auto HandleStatementWhileConditionFinish(Context& context) -> void {
 auto HandleStatementWhileBlockFinish(Context& context) -> void {
   auto state = context.PopState();
 
-  context.AddNode(NodeKind::WhileStatement, state.token, state.subtree_start,
-                  state.has_error);
+  context.AddNode(NodeKind::WhileStatement, state.token, state.has_error);
 }
 
 }  // namespace Carbon::Parse

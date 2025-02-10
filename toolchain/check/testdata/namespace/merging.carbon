@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/check/testdata/namespace/merging.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/check/testdata/namespace/merging.carbon
 
 // --- a.carbon
 
-package Example library "a" api;
+package Example library "[[@TEST_NAME]]";
 
 namespace NS;
 
@@ -14,7 +18,7 @@ fn NS.A() {}
 
 // --- b.carbon
 
-package Example library "b" api;
+package Example library "[[@TEST_NAME]]";
 
 namespace NS;
 
@@ -26,7 +30,7 @@ fn NS.B2() {}
 
 // --- c.carbon
 
-package Example library "c" api;
+package Example library "[[@TEST_NAME]]";
 
 import library "a";
 import library "b";
@@ -44,14 +48,28 @@ fn Run() {
 
 // CHECK:STDOUT: --- a.carbon
 // CHECK:STDOUT:
+// CHECK:STDOUT: constants {
+// CHECK:STDOUT:   %A.type: type = fn_type @A [template]
+// CHECK:STDOUT:   %A: %A.type = struct_value () [template]
+// CHECK:STDOUT: }
+// CHECK:STDOUT:
+// CHECK:STDOUT: imports {
+// CHECK:STDOUT:   %Core: <namespace> = namespace file.%Core.import, [template] {
+// CHECK:STDOUT:     import Core//prelude
+// CHECK:STDOUT:     import Core//prelude/...
+// CHECK:STDOUT:   }
+// CHECK:STDOUT: }
+// CHECK:STDOUT:
 // CHECK:STDOUT: file {
 // CHECK:STDOUT:   package: <namespace> = namespace [template] {
-// CHECK:STDOUT:     .NS = %.loc4
+// CHECK:STDOUT:     .Core = imports.%Core
+// CHECK:STDOUT:     .NS = %NS
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %.loc4: <namespace> = namespace [template] {
-// CHECK:STDOUT:     .A = %A
+// CHECK:STDOUT:   %Core.import = import Core
+// CHECK:STDOUT:   %NS: <namespace> = namespace [template] {
+// CHECK:STDOUT:     .A = %A.decl
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %A: <function> = fn_decl @A [template] {}
+// CHECK:STDOUT:   %A.decl: %A.type = fn_decl @A [template = constants.%A] {} {}
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: fn @A() {
@@ -61,17 +79,36 @@ fn Run() {
 // CHECK:STDOUT:
 // CHECK:STDOUT: --- b.carbon
 // CHECK:STDOUT:
+// CHECK:STDOUT: constants {
+// CHECK:STDOUT:   %B1.type: type = fn_type @B1 [template]
+// CHECK:STDOUT:   %B1: %B1.type = struct_value () [template]
+// CHECK:STDOUT:   %B2.type: type = fn_type @B2 [template]
+// CHECK:STDOUT:   %B2: %B2.type = struct_value () [template]
+// CHECK:STDOUT: }
+// CHECK:STDOUT:
+// CHECK:STDOUT: imports {
+// CHECK:STDOUT:   %Core: <namespace> = namespace file.%Core.import, [template] {
+// CHECK:STDOUT:     import Core//prelude
+// CHECK:STDOUT:     import Core//prelude/...
+// CHECK:STDOUT:   }
+// CHECK:STDOUT: }
+// CHECK:STDOUT:
 // CHECK:STDOUT: file {
 // CHECK:STDOUT:   package: <namespace> = namespace [template] {
-// CHECK:STDOUT:     .NS = %.loc4
+// CHECK:STDOUT:     .Core = imports.%Core
+// CHECK:STDOUT:     .NS = %NS.loc4
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %.loc4: <namespace> = namespace [template] {
-// CHECK:STDOUT:     .B1 = %B1
-// CHECK:STDOUT:     .B2 = %B2
+// CHECK:STDOUT:   %Core.import = import Core
+// CHECK:STDOUT:   %NS.loc4: <namespace> = namespace [template] {
+// CHECK:STDOUT:     .B1 = %B1.decl
+// CHECK:STDOUT:     .B2 = %B2.decl
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %B1: <function> = fn_decl @B1 [template] {}
-// CHECK:STDOUT:   %.loc8: <namespace> = namespace [template] {}
-// CHECK:STDOUT:   %B2: <function> = fn_decl @B2 [template] {}
+// CHECK:STDOUT:   %B1.decl: %B1.type = fn_decl @B1 [template = constants.%B1] {} {}
+// CHECK:STDOUT:   %NS.loc8: <namespace> = namespace [template] {
+// CHECK:STDOUT:     .B1 = %B1.decl
+// CHECK:STDOUT:     .B2 = %B2.decl
+// CHECK:STDOUT:   }
+// CHECK:STDOUT:   %B2.decl: %B2.type = fn_decl @B2 [template = constants.%B2] {} {}
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: fn @B1() {
@@ -87,27 +124,52 @@ fn Run() {
 // CHECK:STDOUT: --- c.carbon
 // CHECK:STDOUT:
 // CHECK:STDOUT: constants {
-// CHECK:STDOUT:   %.1: type = tuple_type () [template]
+// CHECK:STDOUT:   %C.type: type = fn_type @C [template]
+// CHECK:STDOUT:   %empty_tuple.type: type = tuple_type () [template]
+// CHECK:STDOUT:   %C: %C.type = struct_value () [template]
+// CHECK:STDOUT:   %Run.type: type = fn_type @Run [template]
+// CHECK:STDOUT:   %Run: %Run.type = struct_value () [template]
+// CHECK:STDOUT:   %A.type: type = fn_type @A [template]
+// CHECK:STDOUT:   %A: %A.type = struct_value () [template]
+// CHECK:STDOUT:   %B1.type: type = fn_type @B1 [template]
+// CHECK:STDOUT:   %B1: %B1.type = struct_value () [template]
+// CHECK:STDOUT:   %B2.type: type = fn_type @B2 [template]
+// CHECK:STDOUT:   %B2: %B2.type = struct_value () [template]
+// CHECK:STDOUT: }
+// CHECK:STDOUT:
+// CHECK:STDOUT: imports {
+// CHECK:STDOUT:   %Example.NS: <namespace> = import_ref Example//a, NS, loaded
+// CHECK:STDOUT:   %NS: <namespace> = namespace %Example.NS, [template] {
+// CHECK:STDOUT:     .A = %Example.A
+// CHECK:STDOUT:     .B1 = %Example.B1
+// CHECK:STDOUT:     .B2 = %Example.B2
+// CHECK:STDOUT:     .C = file.%C.decl
+// CHECK:STDOUT:   }
+// CHECK:STDOUT:   %Example.A: %A.type = import_ref Example//a, A, loaded [template = constants.%A]
+// CHECK:STDOUT:   %Example.B1: %B1.type = import_ref Example//b, B1, loaded [template = constants.%B1]
+// CHECK:STDOUT:   %Example.B2: %B2.type = import_ref Example//b, B2, loaded [template = constants.%B2]
+// CHECK:STDOUT:   %Core: <namespace> = namespace file.%Core.import, [template] {
+// CHECK:STDOUT:     import Core//prelude
+// CHECK:STDOUT:     import Core//prelude/...
+// CHECK:STDOUT:   }
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: file {
 // CHECK:STDOUT:   package: <namespace> = namespace [template] {
-// CHECK:STDOUT:     .NS = %.loc7_13.1
-// CHECK:STDOUT:     .Run = %Run
+// CHECK:STDOUT:     .NS = imports.%NS
+// CHECK:STDOUT:     .Core = imports.%Core
+// CHECK:STDOUT:     .Run = %Run.decl
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %import_ref.1: <namespace> = import_ref ir1, inst+1, used
-// CHECK:STDOUT:   %.loc7_13.1: <namespace> = namespace %import_ref.1, [template] {
-// CHECK:STDOUT:     .A = %import_ref.2
-// CHECK:STDOUT:     .B1 = %import_ref.3
-// CHECK:STDOUT:     .B2 = %import_ref.4
-// CHECK:STDOUT:     .C = %C
+// CHECK:STDOUT:   %Core.import = import Core
+// CHECK:STDOUT:   %default.import = import <none>
+// CHECK:STDOUT:   %NS: <namespace> = namespace [template] {
+// CHECK:STDOUT:     .A = imports.%Example.A
+// CHECK:STDOUT:     .B1 = imports.%Example.B1
+// CHECK:STDOUT:     .B2 = imports.%Example.B2
+// CHECK:STDOUT:     .C = %C.decl
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %import_ref.2: <function> = import_ref ir1, inst+2, used [template = imports.%A]
-// CHECK:STDOUT:   %import_ref.3: <function> = import_ref ir2, inst+2, used [template = imports.%B1]
-// CHECK:STDOUT:   %import_ref.4: <function> = import_ref ir2, inst+5, used [template = imports.%B2]
-// CHECK:STDOUT:   %.loc7_13.2: <namespace> = namespace [template] {}
-// CHECK:STDOUT:   %C: <function> = fn_decl @C [template] {}
-// CHECK:STDOUT:   %Run: <function> = fn_decl @Run [template] {}
+// CHECK:STDOUT:   %C.decl: %C.type = fn_decl @C [template = constants.%C] {} {}
+// CHECK:STDOUT:   %Run.decl: %Run.type = fn_decl @Run [template = constants.%Run] {} {}
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: fn @C() {
@@ -117,24 +179,24 @@ fn Run() {
 // CHECK:STDOUT:
 // CHECK:STDOUT: fn @Run() {
 // CHECK:STDOUT: !entry:
-// CHECK:STDOUT:   %NS.ref.loc12: <namespace> = name_ref NS, file.%.loc7_13.1 [template = file.%.loc7_13.1]
-// CHECK:STDOUT:   %A.ref: <function> = name_ref A, file.%import_ref.2 [template = imports.%A]
-// CHECK:STDOUT:   %.loc12: init () = call %A.ref()
-// CHECK:STDOUT:   %NS.ref.loc13: <namespace> = name_ref NS, file.%.loc7_13.1 [template = file.%.loc7_13.1]
-// CHECK:STDOUT:   %B1.ref: <function> = name_ref B1, file.%import_ref.3 [template = imports.%B1]
-// CHECK:STDOUT:   %.loc13: init () = call %B1.ref()
-// CHECK:STDOUT:   %NS.ref.loc14: <namespace> = name_ref NS, file.%.loc7_13.1 [template = file.%.loc7_13.1]
-// CHECK:STDOUT:   %B2.ref: <function> = name_ref B2, file.%import_ref.4 [template = imports.%B2]
-// CHECK:STDOUT:   %.loc14: init () = call %B2.ref()
-// CHECK:STDOUT:   %NS.ref.loc15: <namespace> = name_ref NS, file.%.loc7_13.1 [template = file.%.loc7_13.1]
-// CHECK:STDOUT:   %C.ref: <function> = name_ref C, file.%C [template = file.%C]
-// CHECK:STDOUT:   %.loc15: init () = call %C.ref()
+// CHECK:STDOUT:   %NS.ref.loc12: <namespace> = name_ref NS, imports.%NS [template = imports.%NS]
+// CHECK:STDOUT:   %A.ref: %A.type = name_ref A, imports.%Example.A [template = constants.%A]
+// CHECK:STDOUT:   %A.call: init %empty_tuple.type = call %A.ref()
+// CHECK:STDOUT:   %NS.ref.loc13: <namespace> = name_ref NS, imports.%NS [template = imports.%NS]
+// CHECK:STDOUT:   %B1.ref: %B1.type = name_ref B1, imports.%Example.B1 [template = constants.%B1]
+// CHECK:STDOUT:   %B1.call: init %empty_tuple.type = call %B1.ref()
+// CHECK:STDOUT:   %NS.ref.loc14: <namespace> = name_ref NS, imports.%NS [template = imports.%NS]
+// CHECK:STDOUT:   %B2.ref: %B2.type = name_ref B2, imports.%Example.B2 [template = constants.%B2]
+// CHECK:STDOUT:   %B2.call: init %empty_tuple.type = call %B2.ref()
+// CHECK:STDOUT:   %NS.ref.loc15: <namespace> = name_ref NS, imports.%NS [template = imports.%NS]
+// CHECK:STDOUT:   %C.ref: %C.type = name_ref C, file.%C.decl [template = constants.%C]
+// CHECK:STDOUT:   %C.call: init %empty_tuple.type = call %C.ref()
 // CHECK:STDOUT:   return
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
-// CHECK:STDOUT: fn @A();
+// CHECK:STDOUT: fn @A() [from "a.carbon"];
 // CHECK:STDOUT:
-// CHECK:STDOUT: fn @B1();
+// CHECK:STDOUT: fn @B1() [from "b.carbon"];
 // CHECK:STDOUT:
-// CHECK:STDOUT: fn @B2();
+// CHECK:STDOUT: fn @B2() [from "b.carbon"];
 // CHECK:STDOUT:

@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/pointer/const_pointer.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/pointer/const_pointer.carbon
 
 fn A() -> const i32* { return A(); }
 fn B() -> (const i32)* { return B(); }
@@ -12,7 +16,7 @@ fn C() -> const (i32*) { return C(); }
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'A'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'A'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:               {kind: 'IntTypeLiteral', text: 'i32'},
@@ -27,10 +31,10 @@ fn C() -> const (i32*) { return C(); }
 // CHECK:STDOUT:       {kind: 'ReturnStatement', text: ';', subtree_size: 5},
 // CHECK:STDOUT:     {kind: 'FunctionDefinition', text: '}', subtree_size: 15},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'B'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'B'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
-// CHECK:STDOUT:               {kind: 'ExprOpenParen', text: '('},
+// CHECK:STDOUT:               {kind: 'ParenExprStart', text: '('},
 // CHECK:STDOUT:                 {kind: 'IntTypeLiteral', text: 'i32'},
 // CHECK:STDOUT:               {kind: 'PrefixOperatorConst', text: 'const', subtree_size: 2},
 // CHECK:STDOUT:             {kind: 'ParenExpr', text: ')', subtree_size: 4},
@@ -44,10 +48,10 @@ fn C() -> const (i32*) { return C(); }
 // CHECK:STDOUT:       {kind: 'ReturnStatement', text: ';', subtree_size: 5},
 // CHECK:STDOUT:     {kind: 'FunctionDefinition', text: '}', subtree_size: 17},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'C'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'C'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
-// CHECK:STDOUT:               {kind: 'ExprOpenParen', text: '('},
+// CHECK:STDOUT:               {kind: 'ParenExprStart', text: '('},
 // CHECK:STDOUT:                 {kind: 'IntTypeLiteral', text: 'i32'},
 // CHECK:STDOUT:               {kind: 'PostfixOperatorStar', text: '*', subtree_size: 2},
 // CHECK:STDOUT:             {kind: 'ParenExpr', text: ')', subtree_size: 4},

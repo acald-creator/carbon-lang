@@ -3,10 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/function/declaration/fail_skip_without_semi_to_curly.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/function/declaration/fail_skip_without_semi_to_curly.carbon
 
-// CHECK:STDERR: fail_skip_without_semi_to_curly.carbon:[[@LINE+3]]:1: ERROR: Unrecognized declaration introducer.
+// CHECK:STDERR: fail_skip_without_semi_to_curly.carbon:[[@LINE+4]]:1: error: unrecognized declaration introducer [UnrecognizedDecl]
 // CHECK:STDERR: struct X { fn () }
 // CHECK:STDERR: ^~~~~~
+// CHECK:STDERR:
 struct X { fn () }
 fn F();
 
@@ -16,7 +21,7 @@ fn F();
 // CHECK:STDOUT:       {kind: 'InvalidParseStart', text: 'struct', has_error: yes},
 // CHECK:STDOUT:     {kind: 'InvalidParseSubtree', text: '}', has_error: yes, subtree_size: 2},
 // CHECK:STDOUT:       {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:       {kind: 'IdentifierName', text: 'F'},
+// CHECK:STDOUT:       {kind: 'IdentifierNameBeforeParams', text: 'F'},
 // CHECK:STDOUT:         {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:       {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:     {kind: 'FunctionDecl', text: ';', subtree_size: 5},

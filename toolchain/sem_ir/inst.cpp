@@ -7,7 +7,7 @@
 namespace Carbon::SemIR {
 
 auto Inst::Print(llvm::raw_ostream& out) const -> void {
-  out << "{kind: " << kind_;
+  out << "{kind: " << kind();
 
   auto print_args = [&](auto info) {
     using Info = decltype(info);
@@ -19,17 +19,35 @@ auto Inst::Print(llvm::raw_ostream& out) const -> void {
     }
   };
 
-  switch (kind_) {
+  switch (kind()) {
 #define CARBON_SEM_IR_INST_KIND(Name)               \
   case Name::Kind:                                  \
     print_args(Internal::InstLikeTypeInfo<Name>()); \
     break;
 #include "toolchain/sem_ir/inst_kind.def"
   }
-  if (type_id_.is_valid()) {
+  if (type_id_.has_value()) {
     out << ", type: " << type_id_;
   }
   out << "}";
 }
+
+// Returns the IdKind of an instruction's argument, or None if there is no
+// argument with that index.
+template <typename InstKind, int ArgIndex>
+static constexpr auto IdKindFor() -> IdKind {
+  using Info = Internal::InstLikeTypeInfo<InstKind>;
+  if constexpr (ArgIndex < Info::NumArgs) {
+    return IdKind::For<typename Info::template ArgType<ArgIndex>>;
+  } else {
+    return IdKind::None;
+  }
+}
+
+const std::pair<IdKind, IdKind> Inst::ArgKindTable[] = {
+#define CARBON_SEM_IR_INST_KIND(Name) \
+  {IdKindFor<Name, 0>(), IdKindFor<Name, 1>()},
+#include "toolchain/sem_ir/inst_kind.def"
+};
 
 }  // namespace Carbon::SemIR

@@ -4,20 +4,27 @@
 //
 // TODO: This should have an error.
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/if/fail_unbraced.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/if/fail_unbraced.carbon
 
 fn F() {
   if (a)
-    // CHECK:STDERR: fail_unbraced.carbon:[[@LINE+3]]:5: ERROR: Expected braced code block.
+    // CHECK:STDERR: fail_unbraced.carbon:[[@LINE+4]]:5: error: expected braced code block [ExpectedCodeBlock]
     // CHECK:STDERR:     if (b)
     // CHECK:STDERR:     ^~
+    // CHECK:STDERR:
     if (b)
-      // CHECK:STDERR: fail_unbraced.carbon:[[@LINE+3]]:7: ERROR: Expected braced code block.
+      // CHECK:STDERR: fail_unbraced.carbon:[[@LINE+4]]:7: error: expected braced code block [ExpectedCodeBlock]
       // CHECK:STDERR:       if (c)
       // CHECK:STDERR:       ^~
+      // CHECK:STDERR:
       if (c)
-        // CHECK:STDERR: fail_unbraced.carbon:[[@LINE+3]]:9: ERROR: Expected braced code block.
+        // CHECK:STDERR: fail_unbraced.carbon:[[@LINE+4]]:9: error: expected braced code block [ExpectedCodeBlock]
         // CHECK:STDERR:         d;
         // CHECK:STDERR:         ^
+        // CHECK:STDERR:
         d;
 }
 
@@ -25,7 +32,7 @@ fn F() {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'F'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'F'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:       {kind: 'FunctionDefinitionStart', text: '{', subtree_size: 5},

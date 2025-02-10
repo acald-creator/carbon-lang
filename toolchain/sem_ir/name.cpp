@@ -5,28 +5,30 @@
 #include "toolchain/sem_ir/name.h"
 
 #include "llvm/ADT/StringSwitch.h"
-#include "toolchain/sem_ir/file.h"
-#include "toolchain/sem_ir/inst_profile.h"
 
 namespace Carbon::SemIR {
 
 // Get the spelling to use for a special name.
 static auto GetSpecialName(NameId name_id, bool for_ir) -> llvm::StringRef {
   switch (name_id.index) {
-    case NameId::Invalid.index:
-      return for_ir ? "" : "<invalid>";
+    case NameId::None.index:
+      return for_ir ? "" : "<none>";
     case NameId::SelfValue.index:
       return "self";
     case NameId::SelfType.index:
       return "Self";
+    case NameId::PeriodSelf.index:
+      return ".Self";
     case NameId::ReturnSlot.index:
       return for_ir ? "return" : "<return slot>";
     case NameId::PackageNamespace.index:
       return "package";
     case NameId::Base.index:
       return "base";
+    case NameId::Vptr.index:
+      return for_ir ? "vptr" : "<vptr>";
     default:
-      CARBON_FATAL() << "Unknown special name";
+      CARBON_FATAL("Unknown special name");
   }
 }
 

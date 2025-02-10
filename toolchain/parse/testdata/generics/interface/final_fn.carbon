@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/generics/interface/final_fn.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/generics/interface/final_fn.carbon
 
 interface Order {
   fn Less[self: Self](right: Self) -> bool;
@@ -15,42 +19,42 @@ interface Order {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'InterfaceIntroducer', text: 'interface'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'Order'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameNotBeforeParams', text: 'Order'},
 // CHECK:STDOUT:       {kind: 'InterfaceDefinitionStart', text: '{', subtree_size: 3},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'Less'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'Less'},
 // CHECK:STDOUT:           {kind: 'ImplicitParamListStart', text: '['},
 // CHECK:STDOUT:             {kind: 'SelfValueName', text: 'self'},
 // CHECK:STDOUT:             {kind: 'SelfTypeNameExpr', text: 'Self'},
-// CHECK:STDOUT:           {kind: 'BindingPattern', text: ':', subtree_size: 3},
+// CHECK:STDOUT:           {kind: 'LetBindingPattern', text: ':', subtree_size: 3},
 // CHECK:STDOUT:         {kind: 'ImplicitParamList', text: ']', subtree_size: 5},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
-// CHECK:STDOUT:             {kind: 'IdentifierName', text: 'right'},
+// CHECK:STDOUT:             {kind: 'IdentifierNameNotBeforeParams', text: 'right'},
 // CHECK:STDOUT:             {kind: 'SelfTypeNameExpr', text: 'Self'},
-// CHECK:STDOUT:           {kind: 'BindingPattern', text: ':', subtree_size: 3},
+// CHECK:STDOUT:           {kind: 'LetBindingPattern', text: ':', subtree_size: 3},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 5},
 // CHECK:STDOUT:           {kind: 'BoolTypeLiteral', text: 'bool'},
 // CHECK:STDOUT:         {kind: 'ReturnType', text: '->', subtree_size: 2},
 // CHECK:STDOUT:       {kind: 'FunctionDecl', text: ';', subtree_size: 15},
 // CHECK:STDOUT:           {kind: 'FunctionIntroducer', text: 'fn'},
 // CHECK:STDOUT:           {kind: 'FinalModifier', text: 'final'},
-// CHECK:STDOUT:           {kind: 'IdentifierName', text: 'Greater'},
+// CHECK:STDOUT:           {kind: 'IdentifierNameBeforeParams', text: 'Greater'},
 // CHECK:STDOUT:             {kind: 'ImplicitParamListStart', text: '['},
 // CHECK:STDOUT:               {kind: 'SelfValueName', text: 'self'},
 // CHECK:STDOUT:               {kind: 'SelfTypeNameExpr', text: 'Self'},
-// CHECK:STDOUT:             {kind: 'BindingPattern', text: ':', subtree_size: 3},
+// CHECK:STDOUT:             {kind: 'LetBindingPattern', text: ':', subtree_size: 3},
 // CHECK:STDOUT:           {kind: 'ImplicitParamList', text: ']', subtree_size: 5},
 // CHECK:STDOUT:             {kind: 'TuplePatternStart', text: '('},
-// CHECK:STDOUT:               {kind: 'IdentifierName', text: 'right'},
+// CHECK:STDOUT:               {kind: 'IdentifierNameNotBeforeParams', text: 'right'},
 // CHECK:STDOUT:               {kind: 'SelfTypeNameExpr', text: 'Self'},
-// CHECK:STDOUT:             {kind: 'BindingPattern', text: ':', subtree_size: 3},
+// CHECK:STDOUT:             {kind: 'LetBindingPattern', text: ':', subtree_size: 3},
 // CHECK:STDOUT:           {kind: 'TuplePattern', text: ')', subtree_size: 5},
 // CHECK:STDOUT:             {kind: 'BoolTypeLiteral', text: 'bool'},
 // CHECK:STDOUT:           {kind: 'ReturnType', text: '->', subtree_size: 2},
 // CHECK:STDOUT:         {kind: 'FunctionDefinitionStart', text: '{', subtree_size: 16},
 // CHECK:STDOUT:           {kind: 'ReturnStatementStart', text: 'return'},
 // CHECK:STDOUT:                 {kind: 'IdentifierNameExpr', text: 'right'},
-// CHECK:STDOUT:                 {kind: 'IdentifierName', text: 'Less'},
+// CHECK:STDOUT:                 {kind: 'IdentifierNameNotBeforeParams', text: 'Less'},
 // CHECK:STDOUT:               {kind: 'MemberAccessExpr', text: '.', subtree_size: 3},
 // CHECK:STDOUT:             {kind: 'CallExprStart', text: '(', subtree_size: 4},
 // CHECK:STDOUT:             {kind: 'SelfValueNameExpr', text: 'self'},

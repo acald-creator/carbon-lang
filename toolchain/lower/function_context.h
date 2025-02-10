@@ -5,6 +5,7 @@
 #ifndef CARBON_TOOLCHAIN_LOWER_FUNCTION_CONTEXT_H_
 #define CARBON_TOOLCHAIN_LOWER_FUNCTION_CONTEXT_H_
 
+#include "common/map.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -18,6 +19,7 @@ namespace Carbon::Lower {
 class FunctionContext {
  public:
   explicit FunctionContext(FileContext& file_context, llvm::Function* function,
+                           llvm::DISubprogram* di_subprogram,
                            llvm::raw_ostream* vlog_stream);
 
   // Returns a basic block corresponding to the start of the given semantics
@@ -31,7 +33,10 @@ class FunctionContext {
       -> bool;
 
   // Builds LLVM IR for the sequence of instructions in `block_id`.
-  auto LowerBlock(SemIR::InstBlockId block_id) -> void;
+  auto LowerBlockContents(SemIR::InstBlockId block_id) -> void;
+
+  // Builds LLVM IR for the specified instruction.
+  auto LowerInst(SemIR::InstId inst_id) -> void;
 
   // Returns a phi node corresponding to the block argument of the given basic
   // block.
@@ -41,27 +46,37 @@ class FunctionContext {
   // Returns a value for the given instruction.
   auto GetValue(SemIR::InstId inst_id) -> llvm::Value* {
     // All builtins are types, with the same empty lowered value.
-    if (inst_id.is_builtin()) {
+    if (SemIR::IsSingletonInstId(inst_id)) {
       return GetTypeAsValue();
     }
 
-    auto it = locals_.find(inst_id);
-    if (it != locals_.end()) {
-      return it->second;
+    if (auto result = locals_.Lookup(inst_id)) {
+      return result.value();
     }
+
+    if (auto result = file_context_->global_variables().Lookup(inst_id)) {
+      return result.value();
+    }
+
     return file_context_->GetGlobal(inst_id);
   }
 
   // Sets the value for the given instruction.
   auto SetLocal(SemIR::InstId inst_id, llvm::Value* value) {
-    bool added = locals_.insert({inst_id, value}).second;
-    CARBON_CHECK(added) << "Duplicate local insert: " << inst_id << " "
-                        << sem_ir().insts().Get(inst_id);
+    bool added = locals_.Insert(inst_id, value).is_inserted();
+    CARBON_CHECK(added, "Duplicate local insert: {0} {1}", inst_id,
+                 sem_ir().insts().Get(inst_id));
   }
 
   // Gets a callable's function.
   auto GetFunction(SemIR::FunctionId function_id) -> llvm::Function* {
     return file_context_->GetFunction(function_id);
+  }
+
+  // Gets or creates a callable's function.
+  auto GetOrCreateFunction(SemIR::FunctionId function_id,
+                           SemIR::SpecificId specific_id) -> llvm::Function* {
+    return file_context_->GetOrCreateFunction(function_id, specific_id);
   }
 
   // Returns a lowered type for the given type_id.
@@ -72,6 +87,24 @@ class FunctionContext {
   // Returns a lowered value to use for a value of type `type`.
   auto GetTypeAsValue() -> llvm::Value* {
     return file_context_->GetTypeAsValue();
+  }
+
+  // Returns a lowered value to use for a value of int literal type.
+  auto GetIntLiteralAsValue() -> llvm::Constant* {
+    return file_context_->GetIntLiteralAsValue();
+  }
+
+  // Returns the instruction immediately after all the existing static allocas.
+  // This is the insert point for future static allocas.
+  auto GetInstructionAfterAllocas() const -> llvm::Instruction* {
+    return after_allocas_;
+  }
+
+  // Sets the instruction after static allocas. This should be called once,
+  // after the first alloca is created.
+  auto SetInstructionAfterAllocas(llvm::Instruction* after_allocas) {
+    CARBON_CHECK(!after_allocas_);
+    after_allocas_ = after_allocas;
   }
 
   // Create a synthetic block that corresponds to no SemIR::InstBlockId. Such
@@ -96,15 +129,44 @@ class FunctionContext {
     return file_context_->llvm_context();
   }
   auto llvm_module() -> llvm::Module& { return file_context_->llvm_module(); }
-  auto builder() -> llvm::IRBuilder<>& { return builder_; }
+  auto llvm_function() -> llvm::Function& { return *function_; }
+  auto builder() -> llvm::IRBuilderBase& { return builder_; }
   auto sem_ir() -> const SemIR::File& { return file_context_->sem_ir(); }
 
  private:
+  // Custom instruction inserter for our IR builder. Automatically names
+  // instructions.
+  class Inserter : public llvm::IRBuilderDefaultInserter {
+   public:
+    explicit Inserter(const SemIR::InstNamer* inst_namer)
+        : inst_namer_(inst_namer) {}
+
+    // Sets the instruction we are currently emitting.
+    void SetCurrentInstId(SemIR::InstId inst_id) { inst_id_ = inst_id; }
+
+   private:
+    auto InsertHelper(llvm::Instruction* inst, const llvm::Twine& name,
+                      llvm::BasicBlock::iterator insert_pt) const
+        -> void override;
+
+    // The instruction namer.
+    const SemIR::InstNamer* inst_namer_;
+
+    // The current instruction ID.
+    SemIR::InstId inst_id_ = SemIR::InstId::None;
+  };
+
   // Emits a value copy for type `type_id` from `source_id` to `dest_id`.
   // `source_id` must produce a value representation for `type_id`, and
   // `dest_id` must be a pointer to a `type_id` object.
   auto CopyValue(SemIR::TypeId type_id, SemIR::InstId source_id,
                  SemIR::InstId dest_id) -> void;
+
+  // Emits an object representation copy for type `type_id` from `source_id` to
+  // `dest_id`. `source_id` and `dest_id` must produce pointers to `type_id`
+  // objects.
+  auto CopyObject(SemIR::TypeId type_id, SemIR::InstId source_id,
+                  SemIR::InstId dest_id) -> void;
 
   // Context for the overall lowering process.
   FileContext* file_context_;
@@ -112,26 +174,37 @@ class FunctionContext {
   // The IR function we're generating.
   llvm::Function* function_;
 
-  llvm::IRBuilder<> builder_;
+  // Builder for creating code in this function. The insertion point is held at
+  // the location of the current SemIR instruction.
+  llvm::IRBuilder<llvm::ConstantFolder, Inserter> builder_;
+
+  // The instruction after all allocas. This is used as the insert point for new
+  // allocas.
+  llvm::Instruction* after_allocas_ = nullptr;
+
+  llvm::DISubprogram* di_subprogram_;
 
   // The optional vlog stream.
   llvm::raw_ostream* vlog_stream_;
 
   // Maps a function's SemIR::File blocks to lowered blocks.
-  llvm::DenseMap<SemIR::InstBlockId, llvm::BasicBlock*> blocks_;
+  Map<SemIR::InstBlockId, llvm::BasicBlock*> blocks_;
 
   // The synthetic block we most recently created. May be null if there is no
   // such block.
   llvm::BasicBlock* synthetic_block_ = nullptr;
 
   // Maps a function's SemIR::File instructions to lowered values.
-  llvm::DenseMap<SemIR::InstId, llvm::Value*> locals_;
+  Map<SemIR::InstId, llvm::Value*> locals_;
 };
 
-// Declare handlers for each SemIR::File instruction.
-#define CARBON_SEM_IR_INST_KIND(Name)                                \
-  auto Handle##Name(FunctionContext& context, SemIR::InstId inst_id, \
-                    SemIR::Name inst) -> void;
+// Provides handlers for instructions that occur in a FunctionContext. Although
+// this is declared for all instructions, it should only be defined for
+// instructions which are non-constant and not always typed. See
+// `FunctionContext::LowerInst` for how this is used.
+#define CARBON_SEM_IR_INST_KIND(Name)                              \
+  auto HandleInst(FunctionContext& context, SemIR::InstId inst_id, \
+                  SemIR::Name inst) -> void;
 #include "toolchain/sem_ir/inst_kind.def"
 
 }  // namespace Carbon::Lower

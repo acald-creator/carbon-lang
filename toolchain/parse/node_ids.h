@@ -6,25 +6,28 @@
 #define CARBON_TOOLCHAIN_PARSE_NODE_IDS_H_
 
 #include "toolchain/base/index_base.h"
+#include "toolchain/lex/token_index.h"
 #include "toolchain/parse/node_kind.h"
 
 namespace Carbon::Parse {
 
 // Represents an invalid node id of any type
-struct InvalidNodeId {};
+struct NoneNodeId {};
 
 // A lightweight handle representing a node in the tree.
 //
 // Objects of this type are small and cheap to copy and store. They don't
 // contain any of the information about the node, and serve as a handle that
 // can be used with the underlying tree to query for detailed information.
-struct NodeId : public IdBase {
-  // An explicitly invalid instance.
-  static constexpr InvalidNodeId Invalid;
+struct NodeId : public IdBase<NodeId> {
+  static constexpr llvm::StringLiteral Label = "node";
+
+  // A node ID with no value.
+  static constexpr NoneNodeId None;
 
   using IdBase::IdBase;
   // NOLINTNEXTLINE(google-explicit-constructor)
-  constexpr NodeId(InvalidNodeId /*invalid*/) : IdBase(NodeId::InvalidIndex) {}
+  constexpr NodeId(NoneNodeId /*none*/) : IdBase(NoneIndex) {}
 };
 
 // For looking up the type associated with a given id type.
@@ -39,8 +42,7 @@ struct NodeIdForKind : public NodeId {
   static const NodeKind& Kind;
   constexpr explicit NodeIdForKind(NodeId node_id) : NodeId(node_id) {}
   // NOLINTNEXTLINE(google-explicit-constructor)
-  constexpr NodeIdForKind(InvalidNodeId /*invalid*/)
-      : NodeId(NodeId::InvalidIndex) {}
+  constexpr NodeIdForKind(NoneNodeId /*none*/) : NodeId(NoneIndex) {}
 };
 template <const NodeKind& K>
 const NodeKind& NodeIdForKind<K>::Kind = K;
@@ -50,55 +52,66 @@ const NodeKind& NodeIdForKind<K>::Kind = K;
 #include "toolchain/parse/node_kind.def"
 
 // NodeId that matches any NodeKind whose `category()` overlaps with `Category`.
-template <NodeCategory Category>
+template <NodeCategory::RawEnumType Category>
 struct NodeIdInCategory : public NodeId {
-  // TODO: Support conversion from `NodeIdForKind<Kind>` if `Kind::category()`
+  // Support conversion from `NodeIdForKind<Kind>` if Kind's category
   // overlaps with `Category`.
+  template <const NodeKind& Kind>
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  NodeIdInCategory(NodeIdForKind<Kind> node_id) : NodeId(node_id) {
+    CARBON_CHECK(Kind.category().HasAnyOf(Category));
+  }
 
   constexpr explicit NodeIdInCategory(NodeId node_id) : NodeId(node_id) {}
   // NOLINTNEXTLINE(google-explicit-constructor)
-  constexpr NodeIdInCategory(InvalidNodeId /*invalid*/)
-      : NodeId(NodeId::InvalidIndex) {}
+  constexpr NodeIdInCategory(NoneNodeId /*none*/) : NodeId(NoneIndex) {}
 };
 
 // Aliases for `NodeIdInCategory` to describe particular categories of nodes.
 using AnyDeclId = NodeIdInCategory<NodeCategory::Decl>;
 using AnyExprId = NodeIdInCategory<NodeCategory::Expr>;
 using AnyImplAsId = NodeIdInCategory<NodeCategory::ImplAs>;
-using AnyMemberNameId = NodeIdInCategory<NodeCategory::MemberName>;
+using AnyMemberAccessId =
+    NodeIdInCategory<NodeCategory::MemberName | NodeCategory::MemberExpr |
+                     NodeCategory::IntConst>;
 using AnyModifierId = NodeIdInCategory<NodeCategory::Modifier>;
-using AnyNameComponentId = NodeIdInCategory<NodeCategory::NameComponent>;
 using AnyPatternId = NodeIdInCategory<NodeCategory::Pattern>;
-using AnyStatementId = NodeIdInCategory<NodeCategory::Statement>;
+using AnyStatementId =
+    NodeIdInCategory<NodeCategory::Statement | NodeCategory::Decl>;
+using AnyRequirementId = NodeIdInCategory<NodeCategory::Requirement>;
+using AnyNonExprIdentifierNameId =
+    NodeIdInCategory<NodeCategory::NonExprIdentifierName>;
 
-// NodeId with kind that matches either T::Kind or U::Kind.
-template <typename T, typename U>
+// NodeId with kind that matches one of the `T::Kind`s.
+template <typename... T>
 struct NodeIdOneOf : public NodeId {
+  static_assert(sizeof...(T) >= 2, "Expected at least two types.");
   constexpr explicit NodeIdOneOf(NodeId node_id) : NodeId(node_id) {}
   template <const NodeKind& Kind>
   // NOLINTNEXTLINE(google-explicit-constructor)
   NodeIdOneOf(NodeIdForKind<Kind> node_id) : NodeId(node_id) {
-    static_assert(T::Kind == Kind || U::Kind == Kind);
+    static_assert(((T::Kind == Kind) || ...));
   }
   // NOLINTNEXTLINE(google-explicit-constructor)
-  constexpr NodeIdOneOf(InvalidNodeId /*invalid*/)
-      : NodeId(NodeId::InvalidIndex) {}
+  constexpr NodeIdOneOf(NoneNodeId /*none*/) : NodeId(NoneIndex) {}
 };
 
 using AnyClassDeclId = NodeIdOneOf<ClassDeclId, ClassDefinitionStartId>;
-using AnyFunctionDeclId =
-    NodeIdOneOf<FunctionDeclId, FunctionDefinitionStartId>;
+using AnyFunctionDeclId = NodeIdOneOf<FunctionDeclId, FunctionDefinitionStartId,
+                                      BuiltinFunctionDefinitionStartId>;
 using AnyImplDeclId = NodeIdOneOf<ImplDeclId, ImplDefinitionStartId>;
 using AnyInterfaceDeclId =
     NodeIdOneOf<InterfaceDeclId, InterfaceDefinitionStartId>;
+using AnyNamespaceId = NodeIdOneOf<NamespaceId, ImportDeclId>;
+using AnyPointerDeferenceExprId =
+    NodeIdOneOf<PrefixOperatorStarId, PointerMemberAccessExprId>;
 
 // NodeId with kind that is anything but T::Kind.
 template <typename T>
 struct NodeIdNot : public NodeId {
   constexpr explicit NodeIdNot(NodeId node_id) : NodeId(node_id) {}
   // NOLINTNEXTLINE(google-explicit-constructor)
-  constexpr NodeIdNot(InvalidNodeId /*invalid*/)
-      : NodeId(NodeId::InvalidIndex) {}
+  constexpr NodeIdNot(NoneNodeId /*none*/) : NodeId(NoneIndex) {}
 };
 
 // Note that the support for extracting these types using the `Tree::Extract*`

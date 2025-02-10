@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("//bazel/manifest:defs.bzl", "manifest")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -13,10 +14,20 @@ filegroup(
 
 cc_library(
     name = "diagnostic_emitter",
-    hdrs = ["diagnostic_emitter.h"],
+    srcs = [
+        "diagnostic.cpp",
+        "diagnostic_consumer.cpp",
+    ],
+    hdrs = [
+        "diagnostic.h",
+        "diagnostic_consumer.h",
+        "diagnostic_emitter.h",
+    ],
     deps = [
         ":diagnostic_kind",
+        ":format_providers",
         "//common:check",
+        "//common:ostream",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -29,7 +40,7 @@ cc_test(
         ":diagnostic_emitter",
         ":mocks",
         "//testing/base:gtest_main",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -43,6 +54,63 @@ cc_library(
     ],
     deps = [
         "//common:enum_base",
+    ],
+)
+
+manifest(
+    name = "all_testdata.txt",
+    srcs = ["//toolchain/testing:all_testdata"],
+)
+
+cc_test(
+    name = "coverage_test",
+    size = "small",
+    srcs = ["coverage_test.cpp"],
+    args = ["--testdata_manifest=$(location :all_testdata.txt)"],
+    data = [
+        ":all_testdata.txt",
+        "//toolchain/testing:all_testdata",
+    ],
+    deps = [
+        ":diagnostic_kind",
+        "//testing/base:gtest_main",
+        "//toolchain/testing:coverage_helper",
+        "@abseil-cpp//absl/flags:flag",
+        "@googletest//:gtest",
+    ],
+)
+
+cc_library(
+    name = "file_diagnostics",
+    hdrs = ["file_diagnostics.h"],
+    deps = [
+        ":diagnostic_emitter",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_library(
+    name = "format_providers",
+    srcs = ["format_providers.cpp"],
+    hdrs = ["format_providers.h"],
+    deps = [
+        "//common:check",
+        "//common:ostream",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_test(
+    name = "format_providers_test",
+    size = "small",
+    srcs = ["format_providers_test.cpp"],
+    deps = [
+        ":diagnostic_emitter",
+        ":format_providers",
+        ":mocks",
+        "//testing/base:gtest_main",
+        "@googletest//:gtest",
+        "@llvm-project//llvm:Support",
     ],
 )
 
@@ -74,7 +142,7 @@ cc_test(
         ":mocks",
         ":sorting_diagnostic_consumer",
         "//testing/base:gtest_main",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -86,7 +154,7 @@ cc_library(
     hdrs = ["mocks.h"],
     deps = [
         ":diagnostic_emitter",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )

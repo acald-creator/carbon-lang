@@ -3,49 +3,67 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/check/context.h"
+#include "toolchain/check/handle.h"
 
 namespace Carbon::Check {
 
-auto HandleImplicitParamListStart(Context& context,
-                                  Parse::ImplicitParamListStartId parse_node)
+auto HandleParseNode(Context& context, Parse::ImplicitParamListStartId node_id)
     -> bool {
-  context.node_stack().Push(parse_node);
+  context.node_stack().Push(node_id);
   context.param_and_arg_refs_stack().Push();
+  context.BeginSubpattern();
   return true;
 }
 
-auto HandleImplicitParamList(Context& context,
-                             Parse::ImplicitParamListId parse_node) -> bool {
+auto HandleParseNode(Context& context, Parse::ImplicitParamListId node_id)
+    -> bool {
+  if (context.node_stack().PeekIs(Parse::NodeKind::ImplicitParamListStart)) {
+    // End the subpattern started by a trailing comma, or the opening delimiter
+    // of an empty list.
+    context.EndSubpatternAsEmpty();
+  }
+  // Note the Start node remains on the stack, where the param list handler can
+  // make use of it.
   auto refs_id = context.param_and_arg_refs_stack().EndAndPop(
       Parse::NodeKind::ImplicitParamListStart);
-  context.node_stack()
-      .PopAndDiscardSoloParseNode<Parse::NodeKind::ImplicitParamListStart>();
-  context.node_stack().Push(parse_node, refs_id);
+  context.node_stack().Push(node_id, refs_id);
   // The implicit parameter list's scope extends to the end of the following
   // parameter list.
   return true;
 }
 
-auto HandleTuplePatternStart(Context& context,
-                             Parse::TuplePatternStartId parse_node) -> bool {
-  context.node_stack().Push(parse_node);
-  context.param_and_arg_refs_stack().Push();
-  return true;
-}
-
-auto HandlePatternListComma(Context& context,
-                            Parse::PatternListCommaId /*parse_node*/) -> bool {
-  context.param_and_arg_refs_stack().ApplyComma();
-  return true;
-}
-
-auto HandleTuplePattern(Context& context, Parse::TuplePatternId parse_node)
+auto HandleParseNode(Context& context, Parse::TuplePatternStartId node_id)
     -> bool {
+  context.node_stack().Push(node_id);
+  context.param_and_arg_refs_stack().Push();
+  context.BeginSubpattern();
+  // TODO: Remove this branch once the parse tree differentiates between
+  // tuple patterns and param patterns.
+  if (context.full_pattern_stack().CurrentKind() ==
+      FullPatternStack::Kind::ImplicitParamList) {
+    context.full_pattern_stack().EndImplicitParamList();
+  }
+  return true;
+}
+
+auto HandleParseNode(Context& context, Parse::PatternListCommaId /*node_id*/)
+    -> bool {
+  context.param_and_arg_refs_stack().ApplyComma();
+  context.BeginSubpattern();
+  return true;
+}
+
+auto HandleParseNode(Context& context, Parse::TuplePatternId node_id) -> bool {
+  if (context.node_stack().PeekIs(Parse::NodeKind::TuplePatternStart)) {
+    // End the subpattern started by a trailing comma, or the opening delimiter
+    // of an empty list.
+    context.EndSubpatternAsEmpty();
+  }
+  // Note the Start node remains on the stack, where the param list handler can
+  // make use of it.
   auto refs_id = context.param_and_arg_refs_stack().EndAndPop(
       Parse::NodeKind::TuplePatternStart);
-  context.node_stack()
-      .PopAndDiscardSoloParseNode<Parse::NodeKind::TuplePatternStart>();
-  context.node_stack().Push(parse_node, refs_id);
+  context.node_stack().Push(node_id, refs_id);
   return true;
 }
 

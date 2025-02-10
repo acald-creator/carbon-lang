@@ -3,12 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/match/fail_missing_default_arrow.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/match/fail_missing_default_arrow.carbon
 
 fn f() -> i32 {
   match (3) {
-    // CHECK:STDERR: fail_missing_default_arrow.carbon:[[@LINE+3]]:13: ERROR: Expected `=>` introducing statement block.
+    // CHECK:STDERR: fail_missing_default_arrow.carbon:[[@LINE+4]]:13: error: expected `=>` introducing statement block [ExpectedMatchCaseArrow]
     // CHECK:STDERR:     default { return 1; }
     // CHECK:STDERR:             ^
+    // CHECK:STDERR:
     default { return 1; }
   }
   return 0;
@@ -18,7 +23,7 @@ fn f() -> i32 {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'f'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'f'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:           {kind: 'IntTypeLiteral', text: 'i32'},

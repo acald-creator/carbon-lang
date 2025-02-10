@@ -27,7 +27,7 @@ cc_test(
         ":syntax",
         "//explorer/base:arena",
         "//testing/base:gtest_main",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
     ],
 )
 
@@ -41,7 +41,7 @@ cc_library(
     tags = ["no-clang-tidy"],
     deps = [
         ":syntax",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -88,12 +88,12 @@ cc_library(
         "-Wno-unused-but-set-variable",
         "-Wno-unused-function",
         "-Wno-writable-strings",
+        "-Wno-zero-as-null-pointer-constant",
     ],
     # Running clang-tidy is slow, and explorer is currently feature frozen, so
     # don't spend time linting it.
     tags = ["no-clang-tidy"],
     visibility = [
-        "//explorer/fuzzing:__pkg__",
         "//explorer/parse_and_execute:__pkg__",
     ],
     deps = [
@@ -173,6 +173,6 @@ cc_test(
         ":syntax",
         "//explorer/ast:ast_test_matchers",
         "//testing/base:gtest_main",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
     ],
 )

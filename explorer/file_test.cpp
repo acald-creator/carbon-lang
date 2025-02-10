@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "absl/flags/flag.h"
+#include "common/raw_string_ostream.h"
 #include "explorer/main.h"
 #include "re2/re2.h"
-#include "testing/base/test_raw_ostream.h"
 #include "testing/file_test/file_test_base.h"
 
 ABSL_FLAG(bool, trace, false,
@@ -18,17 +18,20 @@ namespace {
 
 class ExplorerFileTest : public FileTestBase {
  public:
-  explicit ExplorerFileTest(llvm::StringRef test_name)
-      : FileTestBase(test_name),
+  explicit ExplorerFileTest(llvm::StringRef /*exe_path*/,
+                            std::mutex* output_mutex, llvm::StringRef test_name)
+      : FileTestBase(output_mutex, test_name),
         prelude_line_re_(R"(prelude.carbon:(\d+))"),
         timing_re_(R"((Time elapsed in \w+: )\d+(ms))") {
-    CARBON_CHECK(prelude_line_re_.ok()) << prelude_line_re_.error();
-    CARBON_CHECK(timing_re_.ok()) << timing_re_.error();
+    CARBON_CHECK(prelude_line_re_.ok(), "{0}", prelude_line_re_.error());
+    CARBON_CHECK(timing_re_.ok(), "{0}", timing_re_.error());
   }
 
   auto Run(const llvm::SmallVector<llvm::StringRef>& test_args,
-           llvm::vfs::InMemoryFileSystem& fs, llvm::raw_pwrite_stream& stdout,
-           llvm::raw_pwrite_stream& stderr) -> ErrorOr<bool> override {
+           llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem>& fs,
+           FILE* /*input_stream*/, llvm::raw_pwrite_stream& output_stream,
+           llvm::raw_pwrite_stream& error_stream)
+      -> ErrorOr<RunResult> override {
     // Add the prelude.
     llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> prelude =
         llvm::MemoryBuffer::getFile("explorer/data/prelude.carbon");
@@ -40,7 +43,8 @@ class ExplorerFileTest : public FileTestBase {
     // here.
     static constexpr llvm::StringLiteral PreludePath =
         "/explorer/data/prelude.carbon";
-    if (!fs.addFile(PreludePath, /*ModificationTime=*/0, std::move(*prelude))) {
+    if (!fs->addFile(PreludePath, /*ModificationTime=*/0,
+                     std::move(*prelude))) {
       return ErrorBuilder() << "Duplicate prelude.carbon";
     }
 
@@ -49,11 +53,12 @@ class ExplorerFileTest : public FileTestBase {
       args.push_back(arg.data());
     }
 
-    int exit_code = ExplorerMain(
-        args.size(), args.data(), /*install_path=*/"", PreludePath, stdout,
-        stderr, check_trace_output() ? stdout : trace_stream_, fs);
+    int exit_code =
+        ExplorerMain(args.size(), args.data(), /*install_path=*/"", PreludePath,
+                     output_stream, error_stream,
+                     check_trace_output() ? output_stream : trace_stream_, *fs);
 
-    return exit_code == EXIT_SUCCESS;
+    return {{.success = exit_code == EXIT_SUCCESS}};
   }
 
   auto ValidateRun() -> void override {
@@ -100,13 +105,13 @@ class ExplorerFileTest : public FileTestBase {
     return test_name().find("/trace/") != std::string::npos;
   }
 
-  TestRawOstream trace_stream_;
+  RawStringOstream trace_stream_;
   RE2 prelude_line_re_;
   RE2 timing_re_;
 };
 
 }  // namespace
 
-CARBON_FILE_TEST_FACTORY(ExplorerFileTest);
+CARBON_FILE_TEST_FACTORY(ExplorerFileTest)
 
 }  // namespace Carbon::Testing

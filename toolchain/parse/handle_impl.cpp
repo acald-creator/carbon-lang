@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 
@@ -31,14 +32,13 @@ auto HandleImplAfterIntroducer(Context& context) -> void {
       context.PushState(State::PatternListAsImplicit);
     } else {
       CARBON_DIAGNOSTIC(ImplExpectedAfterForall, Error,
-                        "Expected `[` after `forall` in `impl` declaration.");
+                        "expected `[` after `forall` in `impl` declaration");
       context.emitter().Emit(*context.position(), ImplExpectedAfterForall);
       context.ReturnErrorOnState();
       // If we aren't producing a node from the PatternListAsImplicit state,
       // we still need to create a node to be the child of the `ImplForall`
       // token created in the `ImplAfterForall` state.
-      context.AddLeafNode(NodeKind::InvalidParse, *context.position(),
-                          /*has_error=*/true);
+      context.AddInvalidParse(*context.position());
     }
   } else {
     // One of:
@@ -53,8 +53,7 @@ auto HandleImplAfterForall(Context& context) -> void {
   if (state.has_error) {
     context.ReturnErrorOnState();
   }
-  context.AddNode(NodeKind::ImplForall, state.token, state.subtree_start,
-                  state.has_error);
+  context.AddNode(NodeKind::ImplForall, state.token, state.has_error);
   // One of:
   //   as <expression> ...
   //   <expression> as <expression>...
@@ -64,13 +63,12 @@ auto HandleImplAfterForall(Context& context) -> void {
 auto HandleImplBeforeAs(Context& context) -> void {
   auto state = context.PopState();
   if (auto as = context.ConsumeIf(Lex::TokenKind::As)) {
-    context.AddNode(NodeKind::TypeImplAs, *as, state.subtree_start,
-                    state.has_error);
+    context.AddNode(NodeKind::TypeImplAs, *as, state.has_error);
     context.PushState(State::Expr);
   } else {
     if (!state.has_error) {
       CARBON_DIAGNOSTIC(ImplExpectedAs, Error,
-                        "Expected `as` in `impl` declaration.");
+                        "expected `as` in `impl` declaration");
       context.emitter().Emit(*context.position(), ImplExpectedAs);
     }
     context.ReturnErrorOnState();

@@ -3,17 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/if/fail_square_brackets.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/if/fail_square_brackets.carbon
 
 fn F() {
-  // CHECK:STDERR: fail_square_brackets.carbon:[[@LINE+9]]:6: ERROR: Expected `(` after `if`.
+  // CHECK:STDERR: fail_square_brackets.carbon:[[@LINE+12]]:6: error: expected `(` after `if` [ExpectedParenAfter]
   // CHECK:STDERR:   if [] {}
   // CHECK:STDERR:      ^
-  // CHECK:STDERR: fail_square_brackets.carbon:[[@LINE+6]]:7: ERROR: Expected expression.
+  // CHECK:STDERR:
+  // CHECK:STDERR: fail_square_brackets.carbon:[[@LINE+8]]:7: error: expected expression [ExpectedExpr]
   // CHECK:STDERR:   if [] {}
   // CHECK:STDERR:       ^
-  // CHECK:STDERR: fail_square_brackets.carbon:[[@LINE+3]]:7: ERROR: Expected `;` in array type.
+  // CHECK:STDERR:
+  // CHECK:STDERR: fail_square_brackets.carbon:[[@LINE+4]]:7: error: expected `;` in array type [ExpectedArraySemi]
   // CHECK:STDERR:   if [] {}
   // CHECK:STDERR:       ^
+  // CHECK:STDERR:
   if [] {}
 }
 
@@ -21,7 +28,7 @@ fn F() {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'F'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'F'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:       {kind: 'FunctionDefinitionStart', text: '{', subtree_size: 5},

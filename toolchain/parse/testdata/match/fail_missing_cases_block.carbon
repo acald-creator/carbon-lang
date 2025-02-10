@@ -3,12 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/match/fail_missing_cases_block.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/match/fail_missing_cases_block.carbon
 
 fn f() -> i32 {
   match (1)
-  // CHECK:STDERR: fail_missing_cases_block.carbon:[[@LINE+3]]:3: ERROR: Expected `{` starting block with cases.
+  // CHECK:STDERR: fail_missing_cases_block.carbon:[[@LINE+4]]:3: error: expected `{` starting block with cases [ExpectedMatchCasesBlock]
   // CHECK:STDERR:   return 0;
   // CHECK:STDERR:   ^~~~~~
+  // CHECK:STDERR:
   return 0;
 }
 
@@ -16,7 +21,7 @@ fn f() -> i32 {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'f'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'f'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:           {kind: 'IntTypeLiteral', text: 'i32'},

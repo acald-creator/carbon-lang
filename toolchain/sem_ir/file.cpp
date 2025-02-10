@@ -7,9 +7,10 @@
 #include "common/check.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "toolchain/base/value_store.h"
+#include "toolchain/base/kind_switch.h"
+#include "toolchain/base/shared_value_stores.h"
 #include "toolchain/base/yaml.h"
-#include "toolchain/sem_ir/builtin_kind.h"
+#include "toolchain/parse/node_ids.h"
 #include "toolchain/sem_ir/ids.h"
 #include "toolchain/sem_ir/inst.h"
 #include "toolchain/sem_ir/inst_kind.h"
@@ -17,98 +18,39 @@
 
 namespace Carbon::SemIR {
 
-auto Function::GetParamFromParamRefId(const File& sem_ir, InstId param_ref_id)
-    -> std::pair<InstId, Param> {
-  auto ref = sem_ir.insts().Get(param_ref_id);
-
-  if (auto addr_pattern = ref.TryAs<SemIR::AddrPattern>()) {
-    param_ref_id = addr_pattern->inner_id;
-    ref = sem_ir.insts().Get(param_ref_id);
-  }
-
-  if (auto bind_name = ref.TryAs<SemIR::AnyBindName>()) {
-    param_ref_id = bind_name->value_id;
-    ref = sem_ir.insts().Get(param_ref_id);
-  }
-
-  return {param_ref_id, ref.As<SemIR::Param>()};
-}
-
-auto ValueRepr::Print(llvm::raw_ostream& out) const -> void {
-  out << "{kind: ";
-  switch (kind) {
-    case Unknown:
-      out << "unknown";
-      break;
-    case None:
-      out << "none";
-      break;
-    case Copy:
-      out << "copy";
-      break;
-    case Pointer:
-      out << "pointer";
-      break;
-    case Custom:
-      out << "custom";
-      break;
-  }
-  out << ", type: " << type_id << "}";
-}
-
-auto TypeInfo::Print(llvm::raw_ostream& out) const -> void {
-  out << "{constant: " << constant_id << ", value_rep: " << value_repr << "}";
-}
-
-File::File(SharedValueStores& value_stores, std::string filename,
-           const File* builtins, llvm::function_ref<void()> init_builtins)
-    : value_stores_(&value_stores),
+File::File(const Parse::Tree* parse_tree, CheckIRId check_ir_id,
+           const std::optional<Parse::Tree::PackagingDecl>& packaging_decl,
+           SharedValueStores& value_stores, std::string filename)
+    : parse_tree_(parse_tree),
+      check_ir_id_(check_ir_id),
+      package_id_(packaging_decl ? packaging_decl->names.package_id
+                                 : IdentifierId::None),
+      library_id_(packaging_decl ? LibraryNameId::ForStringLiteralValueId(
+                                       packaging_decl->names.library_id)
+                                 : LibraryNameId::Default),
+      value_stores_(&value_stores),
       filename_(std::move(filename)),
+      impls_(*this),
       type_blocks_(allocator_),
       constant_values_(ConstantId::NotConstant),
       inst_blocks_(allocator_),
-      constants_(*this, allocator_) {
-  CARBON_CHECK(builtins != nullptr);
-  auto builtins_id = import_irs_.Add(builtins);
-  CARBON_CHECK(builtins_id == ImportIRId::Builtins)
-      << "Builtins must be the first IR";
+      constants_(this) {
+  // `type` and the error type are both complete types.
+  types_.SetValueRepr(
+      TypeType::SingletonTypeId,
+      {.kind = ValueRepr::Copy, .type_id = TypeType::SingletonTypeId});
+  types_.SetValueRepr(
+      ErrorInst::SingletonTypeId,
+      {.kind = ValueRepr::Copy, .type_id = ErrorInst::SingletonTypeId});
 
-  insts_.Reserve(BuiltinKind::ValidCount);
-  init_builtins();
-  CARBON_CHECK(insts_.size() == BuiltinKind::ValidCount)
-      << "Builtins should produce " << BuiltinKind::ValidCount
-      << " insts, actual: " << insts_.size();
-  for (auto i : llvm::seq(BuiltinKind::ValidCount)) {
-    auto builtin_id = SemIR::InstId(i);
-    constant_values_.Set(builtin_id,
-                         SemIR::ConstantId::ForTemplateConstant(builtin_id));
+  insts_.Reserve(SingletonInstKinds.size());
+  for (auto kind : SingletonInstKinds) {
+    auto inst_id =
+        insts_.AddInNoBlock(LocIdAndInst::NoLoc(Inst::MakeSingleton(kind)));
+    constant_values_.Set(inst_id,
+                         SemIR::ConstantId::ForTemplateConstant(inst_id));
   }
 }
-
-File::File(SharedValueStores& value_stores)
-    : File(value_stores, "<builtins>", this, [&]() {
-// Error uses a self-referential type so that it's not accidentally treated as
-// a normal type. Every other builtin is a type, including the
-// self-referential TypeType.
-#define CARBON_SEM_IR_BUILTIN_KIND(Name, ...)                              \
-  insts_.AddInNoBlock(                                                     \
-      {Builtin{BuiltinKind::Name == BuiltinKind::Error ? TypeId::Error     \
-                                                       : TypeId::TypeType, \
-               BuiltinKind::Name}});
-#include "toolchain/sem_ir/builtin_kind.def"
-      }) {
-}
-
-File::File(SharedValueStores& value_stores, std::string filename,
-           const File* builtins)
-    : File(value_stores, filename, builtins, [&]() {
-        for (auto [i, inst] : llvm::enumerate(builtins->insts_.array_ref())) {
-          // We can reuse the type_id from the builtin IR's inst because they're
-          // special-cased values.
-          insts_.AddInNoBlock({ImportRefUsed{
-              inst.type_id(), ImportIRId::Builtins, SemIR::InstId(i)}});
-        }
-      }) {}
 
 auto File::Verify() const -> ErrorOr<Success> {
   // Invariants don't necessarily hold for invalid IR.
@@ -147,384 +89,83 @@ auto File::Verify() const -> ErrorOr<Success> {
   return Success();
 }
 
-auto File::OutputYaml(bool include_builtins) const -> Yaml::OutputMapping {
-  return Yaml::OutputMapping([this,
-                              include_builtins](Yaml::OutputMapping::Map map) {
+auto File::OutputYaml(bool include_singletons) const -> Yaml::OutputMapping {
+  return Yaml::OutputMapping([this, include_singletons](
+                                 Yaml::OutputMapping::Map map) {
     map.Add("filename", filename_);
     map.Add(
         "sem_ir", Yaml::OutputMapping([&](Yaml::OutputMapping::Map map) {
-          map.Add("import_irs_size", Yaml::OutputScalar(import_irs_.size()));
+          map.Add("import_irs", import_irs_.OutputYaml());
+          map.Add("import_ir_insts", import_ir_insts_.OutputYaml());
           map.Add("name_scopes", name_scopes_.OutputYaml());
-          map.Add("bind_names", bind_names_.OutputYaml());
+          map.Add("entity_names", entity_names_.OutputYaml());
           map.Add("functions", functions_.OutputYaml());
           map.Add("classes", classes_.OutputYaml());
+          map.Add("generics", generics_.OutputYaml());
+          map.Add("specifics", specifics_.OutputYaml());
+          map.Add("struct_type_fields", struct_type_fields_.OutputYaml());
           map.Add("types", types_.OutputYaml());
           map.Add("type_blocks", type_blocks_.OutputYaml());
-          map.Add("insts",
-                  Yaml::OutputMapping([&](Yaml::OutputMapping::Map map) {
-                    int start = include_builtins ? 0 : BuiltinKind::ValidCount;
-                    for (int i : llvm::seq(start, insts_.size())) {
-                      auto id = InstId(i);
-                      map.Add(PrintToString(id),
-                              Yaml::OutputScalar(insts_.Get(id)));
-                    }
-                  }));
+          map.Add(
+              "insts", Yaml::OutputMapping([&](Yaml::OutputMapping::Map map) {
+                int start = include_singletons ? 0 : SingletonInstKinds.size();
+                for (int i : llvm::seq(start, insts_.size())) {
+                  auto id = InstId(i);
+                  map.Add(PrintToString(id),
+                          Yaml::OutputScalar(insts_.Get(id)));
+                }
+              }));
           map.Add("constant_values",
                   Yaml::OutputMapping([&](Yaml::OutputMapping::Map map) {
-                    int start = include_builtins ? 0 : BuiltinKind::ValidCount;
+                    int start =
+                        include_singletons ? 0 : SingletonInstKinds.size();
                     for (int i : llvm::seq(start, insts_.size())) {
                       auto id = InstId(i);
                       auto value = constant_values_.Get(id);
-                      if (!value.is_valid() || value.is_constant()) {
+                      if (!value.has_value() || value.is_constant()) {
                         map.Add(PrintToString(id), Yaml::OutputScalar(value));
                       }
                     }
                   }));
+          map.Add(
+              "symbolic_constants",
+              Yaml::OutputMapping([&](Yaml::OutputMapping::Map map) {
+                for (const auto& [i, symbolic] :
+                     llvm::enumerate(constant_values().symbolic_constants())) {
+                  map.Add(
+                      PrintToString(ConstantId::ForSymbolicConstantIndex(i)),
+                      Yaml::OutputScalar(symbolic));
+                }
+              }));
           map.Add("inst_blocks", inst_blocks_.OutputYaml());
         }));
   });
 }
 
-// Map an instruction kind representing a type into an integer describing the
-// precedence of that type's syntax. Higher numbers correspond to higher
-// precedence.
-static auto GetTypePrecedence(InstKind kind) -> int {
-  switch (kind) {
-    case ArrayType::Kind:
-    case AssociatedEntityType::Kind:
-    case BindAlias::Kind:
-    case BindSymbolicName::Kind:
-    case Builtin::Kind:
-    case ClassType::Kind:
-    case FacetTypeAccess::Kind:
-    case ImportRefUsed::Kind:
-    case InterfaceType::Kind:
-    case NameRef::Kind:
-    case StructType::Kind:
-    case TupleType::Kind:
-    case UnboundElementType::Kind:
-      return 0;
-    case ConstType::Kind:
-      return -1;
-    case PointerType::Kind:
-      return -2;
-
-    case AddrOf::Kind:
-    case AddrPattern::Kind:
-    case ArrayIndex::Kind:
-    case ArrayInit::Kind:
-    case Assign::Kind:
-    case AssociatedConstantDecl::Kind:
-    case AssociatedEntity::Kind:
-    case BaseDecl::Kind:
-    case BindName::Kind:
-    case BindValue::Kind:
-    case BlockArg::Kind:
-    case BoolLiteral::Kind:
-    case BoundMethod::Kind:
-    case Branch::Kind:
-    case BranchIf::Kind:
-    case BranchWithArg::Kind:
-    case Call::Kind:
-    case ClassDecl::Kind:
-    case ClassElementAccess::Kind:
-    case ClassInit::Kind:
-    case Converted::Kind:
-    case Deref::Kind:
-    case FieldDecl::Kind:
-    case FunctionDecl::Kind:
-    case ImplDecl::Kind:
-    case Import::Kind:
-    case ImportRefUnused::Kind:
-    case InitializeFrom::Kind:
-    case InterfaceDecl::Kind:
-    case IntLiteral::Kind:
-    case Namespace::Kind:
-    case Param::Kind:
-    case RealLiteral::Kind:
-    case Return::Kind:
-    case ReturnExpr::Kind:
-    case SpliceBlock::Kind:
-    case StringLiteral::Kind:
-    case StructAccess::Kind:
-    case StructTypeField::Kind:
-    case StructLiteral::Kind:
-    case StructInit::Kind:
-    case StructValue::Kind:
-    case Temporary::Kind:
-    case TemporaryStorage::Kind:
-    case TupleAccess::Kind:
-    case TupleIndex::Kind:
-    case TupleLiteral::Kind:
-    case TupleInit::Kind:
-    case TupleValue::Kind:
-    case UnaryOperatorNot::Kind:
-    case ValueAsRef::Kind:
-    case ValueOfInitializer::Kind:
-    case VarStorage::Kind:
-      CARBON_FATAL() << "GetTypePrecedence for non-type inst kind " << kind;
-  }
-}
-
-// Implements File::StringifyTypeExpr. Static to prevent accidental use of
-// member functions while traversing IRs.
-static auto StringifyTypeExprImpl(const SemIR::File& outer_sem_ir,
-                                  InstId outer_inst_id) {
-  std::string str;
-  llvm::raw_string_ostream out(str);
-
-  struct Step {
-    // The instruction's file.
-    const File& sem_ir;
-    // The instruction to print.
-    InstId inst_id;
-    // The index into inst_id to print. Not used by all types.
-    int index = 0;
-
-    auto Next() const -> Step {
-      return {.sem_ir = sem_ir, .inst_id = inst_id, .index = index + 1};
-    }
-  };
-  llvm::SmallVector<Step> steps = {
-      Step{.sem_ir = outer_sem_ir, .inst_id = outer_inst_id}};
-
-  while (!steps.empty()) {
-    auto step = steps.pop_back_val();
-    if (!step.inst_id.is_valid()) {
-      out << "<invalid type>";
-      continue;
-    }
-
-    // Builtins have designated labels.
-    if (step.inst_id.is_builtin()) {
-      out << step.inst_id.builtin_kind().label();
-      continue;
-    }
-
-    const auto& sem_ir = step.sem_ir;
-    // Helper for instructions with the current sem_ir.
-    auto push_inst_id = [&](InstId inst_id) {
-      steps.push_back({.sem_ir = sem_ir, .inst_id = inst_id});
-    };
-
-    auto inst = sem_ir.insts().Get(step.inst_id);
-    switch (inst.kind()) {
-      case ArrayType::Kind: {
-        auto array = inst.As<ArrayType>();
-        if (step.index == 0) {
-          out << "[";
-          steps.push_back(step.Next());
-          push_inst_id(sem_ir.types().GetInstId(array.element_type_id));
-        } else if (step.index == 1) {
-          out << "; " << sem_ir.GetArrayBoundValue(array.bound_id) << "]";
-        }
-        break;
-      }
-      case AssociatedEntityType::Kind: {
-        auto assoc = inst.As<AssociatedEntityType>();
-        if (step.index == 0) {
-          out << "<associated ";
-          steps.push_back(step.Next());
-          push_inst_id(sem_ir.types().GetInstId(assoc.entity_type_id));
-        } else {
-          auto interface_name_id =
-              sem_ir.interfaces().Get(assoc.interface_id).name_id;
-          out << " in " << sem_ir.names().GetFormatted(interface_name_id)
-              << ">";
-        }
-        break;
-      }
-      case BindAlias::Kind:
-      case BindSymbolicName::Kind: {
-        auto name_id = inst.As<AnyBindName>().bind_name_id;
-        out << sem_ir.names().GetFormatted(
-            sem_ir.bind_names().Get(name_id).name_id);
-        break;
-      }
-      case ClassType::Kind: {
-        auto class_name_id =
-            sem_ir.classes().Get(inst.As<ClassType>().class_id).name_id;
-        out << sem_ir.names().GetFormatted(class_name_id);
-        break;
-      }
-      case ConstType::Kind: {
-        if (step.index == 0) {
-          out << "const ";
-
-          // Add parentheses if required.
-          auto inner_type_inst_id =
-              sem_ir.types().GetInstId(inst.As<ConstType>().inner_id);
-          if (GetTypePrecedence(sem_ir.insts().Get(inner_type_inst_id).kind()) <
-              GetTypePrecedence(inst.kind())) {
-            out << "(";
-            steps.push_back(step.Next());
-          }
-
-          push_inst_id(inner_type_inst_id);
-        } else if (step.index == 1) {
-          out << ")";
-        }
-        break;
-      }
-      case FacetTypeAccess::Kind: {
-        // Print `T as type` as simply `T`.
-        push_inst_id(inst.As<FacetTypeAccess>().facet_id);
-        break;
-      }
-      case ImportRefUsed::Kind: {
-        auto import_ref = inst.As<ImportRefUsed>();
-        steps.push_back({.sem_ir = *sem_ir.import_irs().Get(import_ref.ir_id),
-                         .inst_id = import_ref.inst_id});
-        break;
-      }
-      case InterfaceType::Kind: {
-        auto interface_name_id = sem_ir.interfaces()
-                                     .Get(inst.As<InterfaceType>().interface_id)
-                                     .name_id;
-        out << sem_ir.names().GetFormatted(interface_name_id);
-        break;
-      }
-      case NameRef::Kind: {
-        out << sem_ir.names().GetFormatted(inst.As<NameRef>().name_id);
-        break;
-      }
-      case PointerType::Kind: {
-        if (step.index == 0) {
-          steps.push_back(step.Next());
-          push_inst_id(
-              sem_ir.types().GetInstId(inst.As<PointerType>().pointee_id));
-        } else if (step.index == 1) {
-          out << "*";
-        }
-        break;
-      }
-      case StructType::Kind: {
-        auto refs = sem_ir.inst_blocks().Get(inst.As<StructType>().fields_id);
-        if (refs.empty()) {
-          out << "{}";
-          break;
-        } else if (step.index == 0) {
-          out << "{";
-        } else if (step.index < static_cast<int>(refs.size())) {
-          out << ", ";
-        } else {
-          out << "}";
-          break;
-        }
-
-        steps.push_back(step.Next());
-        push_inst_id(refs[step.index]);
-        break;
-      }
-      case StructTypeField::Kind: {
-        auto field = inst.As<StructTypeField>();
-        out << "." << sem_ir.names().GetFormatted(field.name_id) << ": ";
-        push_inst_id(sem_ir.types().GetInstId(field.field_type_id));
-        break;
-      }
-      case TupleType::Kind: {
-        auto refs = sem_ir.type_blocks().Get(inst.As<TupleType>().elements_id);
-        if (refs.empty()) {
-          out << "()";
-          break;
-        } else if (step.index == 0) {
-          out << "(";
-        } else if (step.index < static_cast<int>(refs.size())) {
-          out << ", ";
-        } else {
-          // A tuple of one element has a comma to disambiguate from an
-          // expression.
-          if (step.index == 1) {
-            out << ",";
-          }
-          out << ")";
-          break;
-        }
-        steps.push_back(step.Next());
-        push_inst_id(sem_ir.types().GetInstId(refs[step.index]));
-        break;
-      }
-      case UnboundElementType::Kind: {
-        if (step.index == 0) {
-          out << "<unbound element of class ";
-          steps.push_back(step.Next());
-          push_inst_id(sem_ir.types().GetInstId(
-              inst.As<UnboundElementType>().class_type_id));
-        } else {
-          out << ">";
-        }
-        break;
-      }
-      case AddrOf::Kind:
-      case AddrPattern::Kind:
-      case ArrayIndex::Kind:
-      case ArrayInit::Kind:
-      case Assign::Kind:
-      case AssociatedConstantDecl::Kind:
-      case AssociatedEntity::Kind:
-      case BaseDecl::Kind:
-      case BindName::Kind:
-      case BindValue::Kind:
-      case BlockArg::Kind:
-      case BoolLiteral::Kind:
-      case BoundMethod::Kind:
-      case Branch::Kind:
-      case BranchIf::Kind:
-      case BranchWithArg::Kind:
-      case Builtin::Kind:
-      case Call::Kind:
-      case ClassDecl::Kind:
-      case ClassElementAccess::Kind:
-      case ClassInit::Kind:
-      case Converted::Kind:
-      case Deref::Kind:
-      case FieldDecl::Kind:
-      case FunctionDecl::Kind:
-      case ImplDecl::Kind:
-      case Import::Kind:
-      case ImportRefUnused::Kind:
-      case InitializeFrom::Kind:
-      case InterfaceDecl::Kind:
-      case IntLiteral::Kind:
-      case Namespace::Kind:
-      case Param::Kind:
-      case RealLiteral::Kind:
-      case Return::Kind:
-      case ReturnExpr::Kind:
-      case SpliceBlock::Kind:
-      case StringLiteral::Kind:
-      case StructAccess::Kind:
-      case StructLiteral::Kind:
-      case StructInit::Kind:
-      case StructValue::Kind:
-      case Temporary::Kind:
-      case TemporaryStorage::Kind:
-      case TupleAccess::Kind:
-      case TupleIndex::Kind:
-      case TupleLiteral::Kind:
-      case TupleInit::Kind:
-      case TupleValue::Kind:
-      case UnaryOperatorNot::Kind:
-      case ValueAsRef::Kind:
-      case ValueOfInitializer::Kind:
-      case VarStorage::Kind:
-        // We don't need to handle stringification for instructions that don't
-        // show up in errors, but make it clear what's going on so that it's
-        // clearer when stringification is needed.
-        out << "<cannot stringify " << step.inst_id << ">";
-        break;
-    }
-  }
-
-  return str;
-}
-
-auto File::StringifyType(TypeId type_id) const -> std::string {
-  return StringifyTypeExprImpl(*this, types().GetInstId(type_id));
-}
-
-auto File::StringifyTypeExpr(InstId outer_inst_id) const -> std::string {
-  return StringifyTypeExprImpl(*this, outer_inst_id);
+auto File::CollectMemUsage(MemUsage& mem_usage, llvm::StringRef label) const
+    -> void {
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "allocator_"), allocator_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "entity_names_"),
+                    entity_names_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "functions_"), functions_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "classes_"), classes_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "interfaces_"), interfaces_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "impls_"), impls_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "generics_"), generics_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "specifics_"), specifics_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "import_irs_"), import_irs_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "import_ir_insts_"),
+                    import_ir_insts_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "struct_type_fields_"),
+                    struct_type_fields_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "type_blocks_"), type_blocks_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "insts_"), insts_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "name_scopes_"), name_scopes_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "constant_values_"),
+                    constant_values_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "inst_blocks_"), inst_blocks_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "constants_"), constants_);
+  mem_usage.Collect(MemUsage::ConcatLabel(label, "types_"), types_);
 }
 
 auto GetExprCategory(const File& file, InstId inst_id) -> ExprCategory {
@@ -535,95 +176,151 @@ auto GetExprCategory(const File& file, InstId inst_id) -> ExprCategory {
   ExprCategory value_category = ExprCategory::Value;
 
   while (true) {
-    auto inst = ir->insts().Get(inst_id);
-    switch (inst.kind()) {
+    auto untyped_inst = ir->insts().Get(inst_id);
+    CARBON_KIND_SWITCH(untyped_inst) {
+      case AdaptDecl::Kind:
+      case AddrPattern::Kind:
       case Assign::Kind:
       case BaseDecl::Kind:
+      case BindingPattern::Kind:
       case Branch::Kind:
       case BranchIf::Kind:
       case BranchWithArg::Kind:
       case FieldDecl::Kind:
       case FunctionDecl::Kind:
       case ImplDecl::Kind:
-      case Import::Kind:
-      case ImportRefUnused::Kind:
+      case NameBindingDecl::Kind:
       case Namespace::Kind:
+      case OutParamPattern::Kind:
+      case RequirementEquivalent::Kind:
+      case RequirementImpls::Kind:
+      case RequirementRewrite::Kind:
       case Return::Kind:
+      case ReturnSlotPattern::Kind:
+      case Vtable::Kind:
       case ReturnExpr::Kind:
-      case StructTypeField::Kind:
+      case VarPattern::Kind:
         return ExprCategory::NotExpr;
 
-      case ImportRefUsed::Kind: {
-        auto import_ref = inst.As<ImportRefUsed>();
-        ir = ir->import_irs().Get(import_ref.ir_id);
-        inst_id = import_ref.inst_id;
+      case ImportRefUnloaded::Kind:
+      case ImportRefLoaded::Kind: {
+        auto import_ir_inst = ir->import_ir_insts().Get(
+            untyped_inst.As<SemIR::AnyImportRef>().import_ir_inst_id);
+        ir = ir->import_irs().Get(import_ir_inst.ir_id).sem_ir;
+        inst_id = import_ir_inst.inst_id;
         continue;
       }
 
-      case BindAlias::Kind: {
-        inst_id = inst.As<BindAlias>().value_id;
-        continue;
-      }
-      case NameRef::Kind: {
-        inst_id = inst.As<NameRef>().value_id;
+      case CARBON_KIND(AsCompatible inst): {
+        inst_id = inst.source_id;
         continue;
       }
 
-      case Converted::Kind: {
-        inst_id = inst.As<Converted>().result_id;
+      case CARBON_KIND(BindAlias inst): {
+        inst_id = inst.value_id;
+        continue;
+      }
+      case CARBON_KIND(ExportDecl inst): {
+        inst_id = inst.value_id;
+        continue;
+      }
+      case CARBON_KIND(NameRef inst): {
+        inst_id = inst.value_id;
+        continue;
+      }
+
+      case CARBON_KIND(Converted inst): {
+        inst_id = inst.result_id;
+        continue;
+      }
+
+      case CARBON_KIND(SpecificConstant inst): {
+        inst_id = inst.inst_id;
         continue;
       }
 
       case AddrOf::Kind:
-      case AddrPattern::Kind:
       case ArrayType::Kind:
       case AssociatedConstantDecl::Kind:
       case AssociatedEntity::Kind:
       case AssociatedEntityType::Kind:
+      case AutoType::Kind:
       case BindSymbolicName::Kind:
       case BindValue::Kind:
       case BlockArg::Kind:
       case BoolLiteral::Kind:
+      case BoolType::Kind:
       case BoundMethod::Kind:
+      case BoundMethodType::Kind:
       case ClassDecl::Kind:
       case ClassType::Kind:
+      case CompleteTypeWitness::Kind:
       case ConstType::Kind:
-      case FacetTypeAccess::Kind:
+      case FacetAccessType::Kind:
+      case FacetAccessWitness::Kind:
+      case FacetType::Kind:
+      case FacetValue::Kind:
+      case FloatLiteral::Kind:
+      case FloatType::Kind:
+      case FunctionType::Kind:
+      case FunctionTypeWithSelfType::Kind:
+      case GenericClassType::Kind:
+      case GenericInterfaceType::Kind:
+      case ImplWitness::Kind:
+      case ImplWitnessAccess::Kind:
+      case ImportDecl::Kind:
+      case IntLiteralType::Kind:
+      case IntType::Kind:
+      case IntValue::Kind:
       case InterfaceDecl::Kind:
-      case InterfaceType::Kind:
-      case IntLiteral::Kind:
-      case Param::Kind:
+      case LegacyFloatType::Kind:
+      case NamespaceType::Kind:
       case PointerType::Kind:
-      case RealLiteral::Kind:
+      case RequireCompleteType::Kind:
+      case SpecificFunction::Kind:
+      case SpecificFunctionType::Kind:
       case StringLiteral::Kind:
-      case StructValue::Kind:
+      case StringType::Kind:
       case StructType::Kind:
-      case TupleValue::Kind:
+      case StructValue::Kind:
+      case SymbolicBindingPattern::Kind:
       case TupleType::Kind:
+      case TupleValue::Kind:
+      case TypeType::Kind:
       case UnaryOperatorNot::Kind:
       case UnboundElementType::Kind:
       case ValueOfInitializer::Kind:
+      case ValueParam::Kind:
+      case ValueParamPattern::Kind:
+      case VtableType::Kind:
+      case WhereExpr::Kind:
+      case WitnessType::Kind:
         return value_category;
 
-      case Builtin::Kind: {
-        if (inst.As<Builtin>().builtin_kind == BuiltinKind::Error) {
-          return ExprCategory::Error;
+      case ErrorInst::Kind:
+        return ExprCategory::Error;
+
+      case CARBON_KIND(BindName inst): {
+        // TODO: Don't rely on value_id for expression category, since it may
+        // not be valid yet. This workaround only works because we don't support
+        // `var` in function signatures yet.
+        if (!inst.value_id.has_value()) {
+          return value_category;
         }
-        return value_category;
-      }
-
-      case BindName::Kind: {
-        inst_id = inst.As<BindName>().value_id;
+        inst_id = inst.value_id;
         continue;
       }
 
-      case ArrayIndex::Kind: {
-        inst_id = inst.As<ArrayIndex>().array_id;
+      case CARBON_KIND(ArrayIndex inst): {
+        inst_id = inst.array_id;
         continue;
       }
 
-      case ClassElementAccess::Kind: {
-        inst_id = inst.As<ClassElementAccess>().base_id;
+      case VtablePtr::Kind:
+        return ExprCategory::EphemeralRef;
+
+      case CARBON_KIND(ClassElementAccess inst): {
+        inst_id = inst.base_id;
         // A value of class type is a pointer to an object representation.
         // Therefore, if the base is a value, the result is an ephemeral
         // reference.
@@ -631,23 +328,18 @@ auto GetExprCategory(const File& file, InstId inst_id) -> ExprCategory {
         continue;
       }
 
-      case StructAccess::Kind: {
-        inst_id = inst.As<StructAccess>().struct_id;
+      case CARBON_KIND(StructAccess inst): {
+        inst_id = inst.struct_id;
         continue;
       }
 
-      case TupleAccess::Kind: {
-        inst_id = inst.As<TupleAccess>().tuple_id;
+      case CARBON_KIND(TupleAccess inst): {
+        inst_id = inst.tuple_id;
         continue;
       }
 
-      case TupleIndex::Kind: {
-        inst_id = inst.As<TupleIndex>().tuple_id;
-        continue;
-      }
-
-      case SpliceBlock::Kind: {
-        inst_id = inst.As<SpliceBlock>().result_id;
+      case CARBON_KIND(SpliceBlock inst): {
+        inst_id = inst.result_id;
         continue;
       }
 
@@ -665,34 +357,19 @@ auto GetExprCategory(const File& file, InstId inst_id) -> ExprCategory {
 
       case Deref::Kind:
       case VarStorage::Kind:
+      case ReturnSlot::Kind:
         return ExprCategory::DurableRef;
 
       case Temporary::Kind:
       case TemporaryStorage::Kind:
       case ValueAsRef::Kind:
         return ExprCategory::EphemeralRef;
+
+      case OutParam::Kind:
+        // TODO: Consider introducing a separate category for OutParam:
+        // unlike other DurableRefs, it permits initialization.
+        return ExprCategory::DurableRef;
     }
-  }
-}
-
-auto GetInitRepr(const File& file, TypeId type_id) -> InitRepr {
-  auto value_rep = GetValueRepr(file, type_id);
-  switch (value_rep.kind) {
-    case ValueRepr::None:
-      return {.kind = InitRepr::None};
-
-    case ValueRepr::Copy:
-      // TODO: Use in-place initialization for types that have non-trivial
-      // destructive move.
-      return {.kind = InitRepr::ByCopy};
-
-    case ValueRepr::Pointer:
-    case ValueRepr::Custom:
-      return {.kind = InitRepr::InPlace};
-
-    case ValueRepr::Unknown:
-      CARBON_FATAL()
-          << "Attempting to perform initialization of incomplete type";
   }
 }
 

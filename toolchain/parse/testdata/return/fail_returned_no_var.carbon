@@ -3,11 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/return/fail_returned_no_var.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/return/fail_returned_no_var.carbon
 
 fn F() -> String {
-  // CHECK:STDERR: fail_returned_no_var.carbon:[[@LINE+3]]:12: ERROR: Expected `var` after `returned`.
+  // CHECK:STDERR: fail_returned_no_var.carbon:[[@LINE+4]]:12: error: expected `var` after `returned` [ExpectedVarAfterReturned]
   // CHECK:STDERR:   returned fn G() -> i32;
   // CHECK:STDERR:            ^~
+  // CHECK:STDERR:
   returned fn G() -> i32;
 }
 
@@ -15,7 +20,7 @@ fn F() -> String {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'F'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'F'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:           {kind: 'StringTypeLiteral', text: 'String'},

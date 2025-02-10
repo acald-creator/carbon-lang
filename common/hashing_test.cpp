@@ -8,7 +8,9 @@
 #include <gtest/gtest.h>
 
 #include <concepts>
+#include <type_traits>
 
+#include "common/raw_string_ostream.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -39,6 +41,12 @@ TEST(HashingTest, HashCodeAPI) {
 
   EXPECT_THAT(a.ExtractIndex(), Ne(b.ExtractIndex()));
   EXPECT_THAT(a.ExtractIndex(), Ne(empty.ExtractIndex()));
+
+  // The tag shouldn't have bits set outside the range requested.
+  EXPECT_THAT(HashValue("a").ExtractIndexAndTag<1>().second & ~0b1, Eq(0));
+  EXPECT_THAT(HashValue("a").ExtractIndexAndTag<2>().second & ~0b11, Eq(0));
+  EXPECT_THAT(HashValue("a").ExtractIndexAndTag<3>().second & ~0b111, Eq(0));
+  EXPECT_THAT(HashValue("a").ExtractIndexAndTag<4>().second & ~0b1111, Eq(0));
 
   // Note that the index produced with a tag may be different from the index
   // alone!
@@ -74,14 +82,14 @@ TEST(HashingTest, Integers) {
         EXPECT_THAT(hash, Ne(hash_zero));
       }
     };
-    test_int_hash(i);
     test_int_hash(static_cast<int8_t>(i));
     test_int_hash(static_cast<uint8_t>(i));
     test_int_hash(static_cast<int16_t>(i));
     test_int_hash(static_cast<uint16_t>(i));
     test_int_hash(static_cast<int32_t>(i));
     test_int_hash(static_cast<uint32_t>(i));
-    test_int_hash(static_cast<int64_t>(i));
+    // `i` is already an int64_t variable.
+    test_int_hash(i);
     test_int_hash(static_cast<uint64_t>(i));
   }
 }
@@ -277,19 +285,90 @@ TEST(HashingTest, BasicStrings) {
   }
 }
 
+TEST(HashingTest, ArrayLike) {
+  int c_array[] = {1, 2, 3, 4};
+  EXPECT_THAT(HashValue(c_array), Eq(HashValue(c_array)));
+  EXPECT_THAT(HashValue(std::array{1, 2, 3, 4}), Eq(HashValue(c_array)));
+  EXPECT_THAT(HashValue(std::vector{1, 2, 3, 4}), Eq(HashValue(c_array)));
+  EXPECT_THAT(HashValue(llvm::SmallVector<int>{1, 2, 3, 4}),
+              Eq(HashValue(c_array)));
+}
+
+TEST(HashingTest, HashAPInt) {
+  // The bit width should be hashed as well as the value.
+  llvm::APInt one_64(/*numBits=*/64, /*val=*/1);
+  llvm::APInt two_64(/*numBits=*/64, /*val=*/2);
+  llvm::APInt one_128(/*numBits=*/128, /*val=*/1);
+  llvm::APInt two_128(/*numBits=*/128, /*val=*/2);
+
+  std::array array = {one_64, two_64, one_128, two_128};
+  for (int i : llvm::seq<int>(array.size())) {
+    EXPECT_THAT(HashValue(array[i]), Eq(HashValue(array[i])));
+
+    for (int j : llvm::seq<int>(i + 1, array.size())) {
+      EXPECT_THAT(HashValue(array[i]), Ne(HashValue(array[j])))
+          << "Hashing #" << i << " and #" << j;
+    }
+  }
+}
+
+TEST(HashingTest, HashAPFloat) {
+  // Hashtable equality for `APFloat` uses a bitwise comparison. This
+  // differentiates between various things that would otherwise not make sense:
+  // - Different floating point semantics
+  // - `-0.0` and `0.0`
+  //
+  // It also allows NaNs to be compared meaningfully.
+  llvm::APFloat zero_float =
+      llvm::APFloat::getZero(llvm::APFloat::IEEEsingle());
+  llvm::APFloat neg_zero_float =
+      llvm::APFloat::getZero(llvm::APFloat::IEEEsingle(), /*Negative=*/true);
+  llvm::APFloat zero_double =
+      llvm::APFloat::getZero(llvm::APFloat::IEEEdouble());
+  llvm::APFloat zero_bfloat = llvm::APFloat::getZero(llvm::APFloat::BFloat());
+  llvm::APFloat one_float = llvm::APFloat::getOne(llvm::APFloat::IEEEsingle());
+  llvm::APFloat inf_float = llvm::APFloat::getInf(llvm::APFloat::IEEEsingle());
+  llvm::APFloat nan_0_float = llvm::APFloat::getNaN(
+      llvm::APFloat::IEEEsingle(), /*Negative=*/false, /*payload=*/0);
+  llvm::APFloat nan_42_float = llvm::APFloat::getNaN(
+      llvm::APFloat::IEEEsingle(), /*Negative=*/false, /*payload=*/42);
+
+  std::array array = {zero_float, neg_zero_float, zero_double, zero_bfloat,
+                      one_float,  inf_float,      nan_42_float};
+  for (int i : llvm::seq<int>(array.size())) {
+    EXPECT_THAT(HashValue(array[i]), Eq(HashValue(array[i])));
+
+    for (int j : llvm::seq<int>(i + 1, array.size())) {
+      EXPECT_THAT(HashValue(array[i]), Ne(HashValue(array[j])))
+          << "Hashing #" << i << " and #" << j;
+    }
+  }
+
+  // Note that currently we use LLVM's hashing of `APFloat` which does *not*
+  // hash the payload of NaNs.
+  EXPECT_THAT(HashValue(nan_0_float), Eq(HashValue(nan_42_float)));
+}
+
+// A type that has hashing customization. However, it also works to be small and
+// appear to have a unique object representation. This helps ensure that when a
+// user provides custom hashing it is reliably used.
 struct HashableType {
-  int x;
-  int y;
+  int8_t x;
+  int8_t y;
 
-  int ignored = 0;
+  int16_t ignored = 0;
 
-  friend auto CarbonHashValue(const HashableType& value, uint64_t seed)
-      -> HashCode {
+  // Provide the hashing but try to craft a relatively low-ranking overload to
+  // help ensure that the hashing framework doesn't accidentally override this.
+  template <typename T>
+    requires(std::same_as<T, HashableType>)
+  friend auto CarbonHashValue(const T& value, uint64_t seed) -> HashCode {
     Hasher hasher(seed);
     hasher.Hash(value.x, value.y);
     return static_cast<HashCode>(hasher);
   }
 };
+static_assert(std::has_unique_object_representations_v<HashableType>);
 
 TEST(HashingTest, CustomType) {
   HashableType a = {.x = 1, .y = 2};
@@ -303,21 +382,102 @@ TEST(HashingTest, CustomType) {
   EXPECT_THAT(HashValue(c), Eq(HashValue(b)));
 }
 
+TEST(HashingTest, ArrayRecursion) {
+  // Make sure we correctly recurse when hashing an array and don't try to use
+  // the object representation.
+  llvm::APInt one_64(/*numBits=*/64, /*val=*/1);
+  llvm::APInt two_64(/*numBits=*/64, /*val=*/2);
+  llvm::APInt one_128(/*numBits=*/128, /*val=*/1);
+  llvm::APInt two_128(/*numBits=*/128, /*val=*/2);
+  std::array apint_array = {one_64, two_64, one_128, two_128};
+  EXPECT_THAT(HashValue(apint_array),
+              Eq(HashValue(std::array{one_64, two_64, one_128, two_128})));
+  EXPECT_THAT(HashValue(apint_array),
+              Ne(HashValue(std::array{one_64, two_64, two_128, one_128})));
+  EXPECT_THAT(HashValue(apint_array),
+              Ne(HashValue(std::array{one_64, two_64, one_64, two_128})));
+  EXPECT_THAT(HashValue(apint_array),
+              Ne(HashValue(std::array{one_64, two_128, one_128, two_128})));
+  EXPECT_THAT(HashValue(apint_array),
+              Ne(HashValue(std::array{one_64, two_64, one_128})));
+  EXPECT_THAT(
+      HashValue(apint_array),
+      Ne(HashValue(std::array{one_64, two_64, one_128, two_128, two_128})));
+
+  // Also test for a custom type that still *looks* like plain data.
+  HashableType a = {.x = 1, .y = 2};
+  HashableType b = {.x = 3, .y = 4};
+  HashableType c = {.x = 3, .y = 4, .ignored = 42};
+  std::array custom_array = {a, b, c, a};
+  EXPECT_THAT(HashValue(custom_array), Eq(HashValue(std::array{a, b, c, a})));
+  EXPECT_THAT(HashValue(custom_array), Eq(HashValue(std::array{a, b, b, a})));
+  EXPECT_THAT(HashValue(custom_array), Ne(HashValue(std::array{a, b, c, b})));
+  EXPECT_THAT(HashValue(custom_array), Ne(HashValue(std::array{a, b, a, c})));
+  EXPECT_THAT(HashValue(custom_array), Ne(HashValue(std::array{a, b, c})));
+  EXPECT_THAT(HashValue(custom_array),
+              Ne(HashValue(std::array{a, b, c, a, a})));
+}
+
+TEST(HashingTest, TupleRecursion) {
+  // Make sure we can hash pairs and tuples which require us to recurse for each
+  // element rather than treating the whole object as raw storage.
+
+  // We can use APInt values to help test this.
+  llvm::APInt one_64(/*numBits=*/64, /*val=*/1);
+  llvm::APInt two_64(/*numBits=*/64, /*val=*/2);
+  llvm::APInt one_128(/*numBits=*/128, /*val=*/1);
+  llvm::APInt two_128(/*numBits=*/128, /*val=*/2);
+  EXPECT_THAT(HashValue(std::pair{one_64, one_128}),
+              Eq(HashValue(std::pair{one_64, one_128})));
+  EXPECT_THAT(HashValue(std::pair{one_64, one_128}),
+              Ne(HashValue(std::pair{one_64, two_64})));
+  EXPECT_THAT(HashValue(std::pair{one_64, one_128}),
+              Ne(HashValue(std::pair{one_64, one_64})));
+  EXPECT_THAT(HashValue(std::pair{one_64, one_128}),
+              Ne(HashValue(std::pair{one_128, one_64})));
+  EXPECT_THAT(HashValue(std::tuple{one_64, one_128, two_64}),
+              Eq(HashValue(std::tuple{one_64, one_128, two_64})));
+  EXPECT_THAT(HashValue(std::tuple{one_64, one_128, two_64}),
+              Ne(HashValue(std::tuple{one_64, two_64, two_64})));
+  EXPECT_THAT(HashValue(std::tuple{one_64, one_128, two_64}),
+              Ne(HashValue(std::tuple{one_64, one_64, two_64})));
+  EXPECT_THAT(HashValue(std::tuple{one_64, one_128, two_64}),
+              Ne(HashValue(std::tuple{one_64, two_64, one_128})));
+  EXPECT_THAT(HashValue(std::tuple{one_64, one_128, two_64}),
+              Ne(HashValue(std::tuple{one_64, one_128})));
+
+  // Also test for a custom type that still *looks* like plain data.
+  HashableType a = {.x = 1, .y = 2};
+  HashableType b = {.x = 3, .y = 4};
+  HashableType c = {.x = 3, .y = 4, .ignored = 42};
+  EXPECT_THAT(HashValue(std::pair{a, b}), Eq(HashValue(std::pair{a, b})));
+  EXPECT_THAT(HashValue(std::pair{a, b}), Ne(HashValue(std::pair{a, a})));
+  EXPECT_THAT(HashValue(std::pair{a, b}), Ne(HashValue(std::pair{b, a})));
+  EXPECT_THAT(HashValue(std::pair{a, b}), Eq(HashValue(std::pair{a, c})));
+  EXPECT_THAT(HashValue(std::tuple{a, b, a}),
+              Eq(HashValue(std::tuple{a, b, a})));
+  EXPECT_THAT(HashValue(std::tuple{a, b, a}),
+              Ne(HashValue(std::tuple{a, b, b})));
+  EXPECT_THAT(HashValue(std::tuple{a, b, a}),
+              Ne(HashValue(std::tuple{a, a, a})));
+  EXPECT_THAT(HashValue(std::tuple{a, b, a}),
+              Eq(HashValue(std::tuple{a, c, a})));
+}
+
 // The only significantly bad seed is zero, so pick a non-zero seed with a tiny
 // amount of entropy to make sure that none of the testing relies on the entropy
 // from this.
 constexpr uint64_t TestSeed = 42ULL * 1024;
 
 auto ToHexBytes(llvm::StringRef s) -> std::string {
-  std::string rendered;
-  llvm::raw_string_ostream os(rendered);
-  os << "{";
+  RawStringOstream rendered;
+  rendered << "{";
   llvm::ListSeparator sep(", ");
   for (const char c : s) {
-    os << sep << llvm::formatv("{0:x2}", static_cast<uint8_t>(c));
+    rendered << sep << llvm::formatv("{0:x2}", static_cast<uint8_t>(c));
   }
-  os << "}";
-  return rendered;
+  rendered << "}";
+  return rendered.TakeStr();
 }
 
 template <typename T>
@@ -332,11 +492,15 @@ template <typename T>
 auto PrintFullWidthHex(llvm::raw_ostream& os, T value) {
   static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4 ||
                 sizeof(T) == 8);
+  // Given the nature of a format string and the good formatting, a nested
+  // conditional seems like the most readable structure.
+  // NOLINTBEGIN(readability-avoid-nested-conditional-operator)
   os << llvm::formatv(sizeof(T) == 1   ? "{0:x2}"
                       : sizeof(T) == 2 ? "{0:x4}"
                       : sizeof(T) == 4 ? "{0:x8}"
                                        : "{0:x16}",
                       static_cast<uint64_t>(value));
+  // NOLINTEND(readability-avoid-nested-conditional-operator)
 }
 
 template <typename T>
@@ -428,9 +592,9 @@ auto FindBitRangeCollisions(llvm::ArrayRef<HashedValue<T>> hashes)
 
   // Now we sort by the extracted bit sequence so we can efficiently scan for
   // colliding bit patterns.
-  std::sort(
-      bits_and_indices.begin(), bits_and_indices.end(),
-      [](const auto& lhs, const auto& rhs) { return lhs.bits < rhs.bits; });
+  llvm::sort(bits_and_indices, [](const auto& lhs, const auto& rhs) {
+    return lhs.bits < rhs.bits;
+  });
 
   // Scan the sorted bit sequences we've extracted looking for collisions. We
   // count the total collisions, but we also track the number of individual
@@ -471,16 +635,15 @@ auto FindBitRangeCollisions(llvm::ArrayRef<HashedValue<T>> hashes)
   }
 
   // Sort by collision count for each hash.
-  std::sort(bits_and_indices.begin(), bits_and_indices.end(),
-            [&](const auto& lhs, const auto& rhs) {
-              return collision_counts[collision_map[lhs.index]] <
-                     collision_counts[collision_map[rhs.index]];
-            });
+  llvm::sort(bits_and_indices, [&](const auto& lhs, const auto& rhs) {
+    return collision_counts[collision_map[lhs.index]] <
+           collision_counts[collision_map[rhs.index]];
+  });
 
   // And compute the median and max.
   int median = collision_counts
       [collision_map[bits_and_indices[bits_and_indices.size() / 2].index]];
-  int max = *std::max_element(collision_counts.begin(), collision_counts.end());
+  int max = *llvm::max_element(collision_counts);
   CARBON_CHECK(max ==
                collision_counts[collision_map[bits_and_indices.back().index]]);
   return {.total = total, .median = median, .max = max};
@@ -489,7 +652,7 @@ auto FindBitRangeCollisions(llvm::ArrayRef<HashedValue<T>> hashes)
 auto CheckNoDuplicateValues(llvm::ArrayRef<HashedString> hashes) -> void {
   for (int i = 0, size = hashes.size(); i < size - 1; ++i) {
     const auto& [_, value] = hashes[i];
-    CARBON_CHECK(value != hashes[i + 1].v) << "Duplicate value: " << value;
+    CARBON_CHECK(value != hashes[i + 1].v, "Duplicate value: {0}", value);
   }
 }
 
@@ -508,11 +671,9 @@ auto AllByteStringsHashedAndSorted() {
     hashes.push_back({HashValue(s, TestSeed), s});
   }
 
-  std::sort(hashes.begin(), hashes.end(),
-            [](const HashedString& lhs, const HashedString& rhs) {
-              return static_cast<uint64_t>(lhs.hash) <
-                     static_cast<uint64_t>(rhs.hash);
-            });
+  llvm::sort(hashes, [](const HashedString& lhs, const HashedString& rhs) {
+    return static_cast<uint64_t>(lhs.hash) < static_cast<uint64_t>(rhs.hash);
+  });
   CheckNoDuplicateValues(hashes);
 
   return hashes;
@@ -535,7 +696,7 @@ auto ExpectNoHashCollisions(llvm::ArrayRef<HashedString> hashes) -> void {
 
 TEST(HashingTest, Collisions1ByteSized) {
   auto hashes_storage = AllByteStringsHashedAndSorted<1>();
-  auto hashes = llvm::ArrayRef(hashes_storage);
+  llvm::ArrayRef hashes = hashes_storage;
   ExpectNoHashCollisions(hashes);
 
   auto low_32bit_collisions = FindBitRangeCollisions<0, 32>(hashes);
@@ -560,7 +721,7 @@ TEST(HashingTest, Collisions1ByteSized) {
 
 TEST(HashingTest, Collisions2ByteSized) {
   auto hashes_storage = AllByteStringsHashedAndSorted<2>();
-  auto hashes = llvm::ArrayRef(hashes_storage);
+  llvm::ArrayRef hashes = hashes_storage;
   ExpectNoHashCollisions(hashes);
 
   auto low_32bit_collisions = FindBitRangeCollisions<0, 32>(hashes);
@@ -668,11 +829,9 @@ struct SparseHashTest : ::testing::Test {
       }
     }
 
-    std::sort(hashes.begin(), hashes.end(),
-              [](const HashedString& lhs, const HashedString& rhs) {
-                return static_cast<uint64_t>(lhs.hash) <
-                       static_cast<uint64_t>(rhs.hash);
-              });
+    llvm::sort(hashes, [](const HashedString& lhs, const HashedString& rhs) {
+      return static_cast<uint64_t>(lhs.hash) < static_cast<uint64_t>(rhs.hash);
+    });
     CheckNoDuplicateValues(hashes);
 
     return hashes;
@@ -690,7 +849,7 @@ TYPED_TEST_SUITE(SparseHashTest, SparseHashTestParams);
 
 TYPED_TEST(SparseHashTest, Collisions) {
   auto hashes_storage = this->GetHashedByteStrings();
-  auto hashes = llvm::ArrayRef(hashes_storage);
+  llvm::ArrayRef hashes = hashes_storage;
   ExpectNoHashCollisions(hashes);
 
   int min_7bit_collisions = llvm::NextPowerOf2(hashes.size() - 1) / (1 << 7);

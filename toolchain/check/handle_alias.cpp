@@ -3,71 +3,71 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/check/context.h"
+#include "toolchain/check/handle.h"
 #include "toolchain/check/modifiers.h"
+#include "toolchain/check/name_component.h"
 #include "toolchain/parse/node_ids.h"
 #include "toolchain/sem_ir/ids.h"
 #include "toolchain/sem_ir/typed_insts.h"
 
 namespace Carbon::Check {
 
-auto HandleAliasIntroducer(Context& context,
-                           Parse::AliasIntroducerId /*parse_node*/) -> bool {
-  context.decl_state_stack().Push(DeclState::Alias);
+auto HandleParseNode(Context& context, Parse::AliasIntroducerId /*node_id*/)
+    -> bool {
+  context.decl_introducer_state_stack().Push<Lex::TokenKind::Alias>();
   context.decl_name_stack().PushScopeAndStartName();
   return true;
 }
 
-auto HandleAliasInitializer(Context& /*context*/,
-                            Parse::AliasInitializerId /*parse_node*/) -> bool {
+auto HandleParseNode(Context& /*context*/,
+                     Parse::AliasInitializerId /*node_id*/) -> bool {
   return true;
 }
 
-auto HandleAlias(Context& context, Parse::AliasId /*parse_node*/) -> bool {
-  auto [expr_node, expr_id] = context.node_stack().PopExprWithParseNode();
+auto HandleParseNode(Context& context, Parse::AliasId /*node_id*/) -> bool {
+  auto [expr_node, expr_id] = context.node_stack().PopExprWithNodeId();
 
-  auto name_context = context.decl_name_stack().FinishName();
+  auto name_context = context.decl_name_stack().FinishName(
+      PopNameComponentWithoutParams(context, Lex::TokenKind::Alias));
 
-  LimitModifiersOnDecl(context, KeywordModifierSet::Access,
-                       Lex::TokenKind::Alias);
-  auto modifiers = context.decl_state_stack().innermost().modifier_set;
-  if (!!(modifiers & KeywordModifierSet::Access)) {
-    context.TODO(context.decl_state_stack().innermost().saw_access_modifier,
-                 "access modifier");
-  }
-  context.decl_state_stack().Pop(DeclState::Alias);
+  auto introducer =
+      context.decl_introducer_state_stack().Pop<Lex::TokenKind::Alias>();
+  LimitModifiersOnDecl(context, introducer, KeywordModifierSet::Access);
 
-  auto bind_name_id = context.bind_names().Add(
+  auto entity_name_id = context.entity_names().Add(
       {.name_id = name_context.name_id_for_new_inst(),
-       .enclosing_scope_id = name_context.enclosing_scope_id_for_new_inst()});
+       .parent_scope_id = name_context.parent_scope_id,
+       .bind_index = SemIR::CompileTimeBindIndex::None});
 
-  auto alias_id = SemIR::InstId::Invalid;
-  if (expr_id.is_builtin()) {
+  auto alias_type_id = SemIR::TypeId::None;
+  auto alias_value_id = SemIR::InstId::None;
+  if (SemIR::IsSingletonInstId(expr_id)) {
     // Type (`bool`) and value (`false`) literals provided by the builtin
     // structure should be turned into name references.
     // TODO: Look into handling `false`, this doesn't do it right now because it
     // sees a value instruction instead of a builtin.
-    alias_id = context.AddInst(
-        {name_context.parse_node,
-         SemIR::BindAlias{context.insts().Get(expr_id).type_id(), bind_name_id,
-                          expr_id}});
+    alias_type_id = context.insts().Get(expr_id).type_id();
+    alias_value_id = expr_id;
   } else if (auto inst = context.insts().TryGetAs<SemIR::NameRef>(expr_id)) {
     // Pass through name references, albeit changing the name in use.
-    alias_id = context.AddInst(
-        {name_context.parse_node,
-         SemIR::BindAlias{inst->type_id, bind_name_id, inst->value_id}});
+    alias_type_id = inst->type_id;
+    alias_value_id = inst->value_id;
   } else {
     CARBON_DIAGNOSTIC(AliasRequiresNameRef, Error,
-                      "Alias initializer must be a name reference.");
+                      "alias initializer must be a name reference");
     context.emitter().Emit(expr_node, AliasRequiresNameRef);
-    alias_id =
-        context.AddInst({name_context.parse_node,
-                         SemIR::BindAlias{SemIR::TypeId::Error, bind_name_id,
-                                          SemIR::InstId::BuiltinError}});
+    alias_type_id = SemIR::ErrorInst::SingletonTypeId;
+    alias_value_id = SemIR::ErrorInst::SingletonInstId;
   }
+  auto alias_id = context.AddInst<SemIR::BindAlias>(
+      name_context.loc_id, {.type_id = alias_type_id,
+                            .entity_name_id = entity_name_id,
+                            .value_id = alias_value_id});
 
   // Add the name of the binding to the current scope.
   context.decl_name_stack().PopScope();
-  context.decl_name_stack().AddNameToLookup(name_context, alias_id);
+  context.decl_name_stack().AddNameOrDiagnose(
+      name_context, alias_id, introducer.modifier_set.GetAccessKind());
   return true;
 }
 

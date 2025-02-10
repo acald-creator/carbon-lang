@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/generics/named_constraint/defined_method.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/generics/named_constraint/defined_method.carbon
 
 constraint Foo {
   fn Add[self: Self](b: Self) -> Self {}
@@ -12,19 +16,19 @@ constraint Foo {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'NamedConstraintIntroducer', text: 'constraint'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'Foo'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameNotBeforeParams', text: 'Foo'},
 // CHECK:STDOUT:       {kind: 'NamedConstraintDefinitionStart', text: '{', subtree_size: 3},
 // CHECK:STDOUT:           {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:           {kind: 'IdentifierName', text: 'Add'},
+// CHECK:STDOUT:           {kind: 'IdentifierNameBeforeParams', text: 'Add'},
 // CHECK:STDOUT:             {kind: 'ImplicitParamListStart', text: '['},
 // CHECK:STDOUT:               {kind: 'SelfValueName', text: 'self'},
 // CHECK:STDOUT:               {kind: 'SelfTypeNameExpr', text: 'Self'},
-// CHECK:STDOUT:             {kind: 'BindingPattern', text: ':', subtree_size: 3},
+// CHECK:STDOUT:             {kind: 'LetBindingPattern', text: ':', subtree_size: 3},
 // CHECK:STDOUT:           {kind: 'ImplicitParamList', text: ']', subtree_size: 5},
 // CHECK:STDOUT:             {kind: 'TuplePatternStart', text: '('},
-// CHECK:STDOUT:               {kind: 'IdentifierName', text: 'b'},
+// CHECK:STDOUT:               {kind: 'IdentifierNameNotBeforeParams', text: 'b'},
 // CHECK:STDOUT:               {kind: 'SelfTypeNameExpr', text: 'Self'},
-// CHECK:STDOUT:             {kind: 'BindingPattern', text: ':', subtree_size: 3},
+// CHECK:STDOUT:             {kind: 'LetBindingPattern', text: ':', subtree_size: 3},
 // CHECK:STDOUT:           {kind: 'TuplePattern', text: ')', subtree_size: 5},
 // CHECK:STDOUT:             {kind: 'SelfTypeNameExpr', text: 'Self'},
 // CHECK:STDOUT:           {kind: 'ReturnType', text: '->', subtree_size: 2},

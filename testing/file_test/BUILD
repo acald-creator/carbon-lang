@@ -18,9 +18,11 @@ cc_library(
     deps = [
         "//common:check",
         "//common:ostream",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_googlesource_code_re2//:re2",
+        "//common:raw_string_ostream",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:string_view",
         "@llvm-project//llvm:Support",
+        "@re2",
     ],
 )
 
@@ -33,11 +35,13 @@ cc_library(
         ":autoupdate",
         "//common:check",
         "//common:error",
+        "//common:exe_path",
         "//common:init_llvm",
         "//common:ostream",
-        "@com_google_absl//absl/flags:flag",
-        "@com_google_absl//absl/flags:parse",
-        "@com_google_googletest//:gtest",
+        "//common:raw_string_ostream",
+        "@abseil-cpp//absl/flags:flag",
+        "@abseil-cpp//absl/flags:parse",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -50,7 +54,7 @@ file_test(
     deps = [
         ":file_test_base",
         "//common:ostream",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )

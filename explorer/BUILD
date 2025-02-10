@@ -4,7 +4,6 @@
 
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("//bazel/cc_toolchains:defs.bzl", "cc_env")
-load("//bazel/sh_run:rules.bzl", "glob_sh_run")
 load("//testing/file_test:rules.bzl", "file_test")
 
 package(default_visibility = [
@@ -58,10 +57,10 @@ cc_binary(
     deps = [
         ":main",
         "//common:check",
-        "//testing/base:test_raw_ostream",
+        "//common:raw_string_ostream",
         "//testing/file_test:file_test_base",
-        "@com_google_absl//absl/flags:flag",
-        "@com_googlesource_code_re2//:re2",
+        "@abseil-cpp//absl/flags:flag",
+        "@re2",
     ],
 )
 
@@ -95,37 +94,13 @@ file_test(
     ),
 )
 
-glob_sh_run(
-    args = ["$(location //explorer)"],
-    data = ["//explorer"],
-    file_exts = ["carbon"],
-)
-
-glob_sh_run(
-    args = [
-        "$(location //explorer)",
-        "--parser_debug",
-        "--trace_file=-",
-    ],
-    data = ["//explorer"],
-    file_exts = ["carbon"],
-    run_ext = "verbose",
-)
-
 filegroup(
-    name = "carbon_files",
-    srcs = glob(["testdata/**/*.carbon"]),
-    # Files are used for validating fuzzer completeness.
-    visibility = ["//explorer/fuzzing:__pkg__"],
-)
-
-filegroup(
-    name = "treesitter_testdata",
+    name = "tree_sitter_testdata",
     srcs = glob(
         ["testdata/**/*.carbon"],
         exclude = [
             "testdata/**/fail_*",
         ],
     ),
-    visibility = ["//utils/treesitter:__pkg__"],
+    visibility = ["//utils/tree_sitter:__pkg__"],
 )

@@ -3,46 +3,75 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/check/testdata/pointer/fail_type_mismatch.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/check/testdata/pointer/fail_type_mismatch.carbon
 
 fn ConstMismatch(p: const {}*) -> const ({}*) {
-  // CHECK:STDERR: fail_type_mismatch.carbon:[[@LINE+3]]:3: ERROR: Cannot implicitly convert from `const {}*` to `const ({}*)`.
+  // CHECK:STDERR: fail_type_mismatch.carbon:[[@LINE+7]]:3: error: cannot implicitly convert from `const {}*` to `const ({}*)` [ImplicitAsConversionFailure]
   // CHECK:STDERR:   return p;
   // CHECK:STDERR:   ^~~~~~~~~
+  // CHECK:STDERR: fail_type_mismatch.carbon:[[@LINE+4]]:3: note: type `const {}*` does not implement interface `Core.ImplicitAs(const ({}*))` [MissingImplInMemberAccessNote]
+  // CHECK:STDERR:   return p;
+  // CHECK:STDERR:   ^~~~~~~~~
+  // CHECK:STDERR:
   return p;
 }
 
 // CHECK:STDOUT: --- fail_type_mismatch.carbon
 // CHECK:STDOUT:
 // CHECK:STDOUT: constants {
-// CHECK:STDOUT:   %.1: type = struct_type {} [template]
-// CHECK:STDOUT:   %.2: type = const_type {} [template]
-// CHECK:STDOUT:   %.3: type = ptr_type const {} [template]
-// CHECK:STDOUT:   %.4: type = ptr_type {} [template]
-// CHECK:STDOUT:   %.5: type = const_type {}* [template]
+// CHECK:STDOUT:   %empty_struct_type: type = struct_type {} [template]
+// CHECK:STDOUT:   %const.c48: type = const_type %empty_struct_type [template]
+// CHECK:STDOUT:   %ptr.bf9: type = ptr_type %const.c48 [template]
+// CHECK:STDOUT:   %ptr.c28: type = ptr_type %empty_struct_type [template]
+// CHECK:STDOUT:   %const.987: type = const_type %ptr.c28 [template]
+// CHECK:STDOUT:   %ConstMismatch.type: type = fn_type @ConstMismatch [template]
+// CHECK:STDOUT:   %ConstMismatch: %ConstMismatch.type = struct_value () [template]
+// CHECK:STDOUT: }
+// CHECK:STDOUT:
+// CHECK:STDOUT: imports {
+// CHECK:STDOUT:   %Core: <namespace> = namespace file.%Core.import, [template] {
+// CHECK:STDOUT:     .ImplicitAs = %Core.ImplicitAs
+// CHECK:STDOUT:     import Core//prelude
+// CHECK:STDOUT:     import Core//prelude/...
+// CHECK:STDOUT:   }
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: file {
 // CHECK:STDOUT:   package: <namespace> = namespace [template] {
-// CHECK:STDOUT:     .ConstMismatch = %ConstMismatch
+// CHECK:STDOUT:     .Core = imports.%Core
+// CHECK:STDOUT:     .ConstMismatch = %ConstMismatch.decl
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %ConstMismatch: <function> = fn_decl @ConstMismatch [template] {
-// CHECK:STDOUT:     %.loc7_28.1: {} = struct_literal ()
-// CHECK:STDOUT:     %.loc7_28.2: type = converted %.loc7_28.1, constants.%.1 [template = constants.%.1]
-// CHECK:STDOUT:     %.loc7_21: type = const_type {} [template = constants.%.2]
-// CHECK:STDOUT:     %.loc7_29: type = ptr_type const {} [template = constants.%.3]
-// CHECK:STDOUT:     %p.loc7_18.1: const {}* = param p
-// CHECK:STDOUT:     @ConstMismatch.%p: const {}* = bind_name p, %p.loc7_18.1
-// CHECK:STDOUT:     %.loc7_43.1: {} = struct_literal ()
-// CHECK:STDOUT:     %.loc7_43.2: type = converted %.loc7_43.1, constants.%.1 [template = constants.%.1]
-// CHECK:STDOUT:     %.loc7_44: type = ptr_type {} [template = constants.%.4]
-// CHECK:STDOUT:     %.loc7_35: type = const_type {}* [template = constants.%.5]
-// CHECK:STDOUT:     %return.var: ref const ({}*) = var <return slot>
+// CHECK:STDOUT:   %Core.import = import Core
+// CHECK:STDOUT:   %ConstMismatch.decl: %ConstMismatch.type = fn_decl @ConstMismatch [template = constants.%ConstMismatch] {
+// CHECK:STDOUT:     %p.patt: %ptr.bf9 = binding_pattern p
+// CHECK:STDOUT:     %p.param_patt: %ptr.bf9 = value_param_pattern %p.patt, runtime_param0
+// CHECK:STDOUT:     %return.patt: %const.987 = return_slot_pattern
+// CHECK:STDOUT:     %return.param_patt: %const.987 = out_param_pattern %return.patt, runtime_param1
+// CHECK:STDOUT:   } {
+// CHECK:STDOUT:     %.loc11_43: %empty_struct_type = struct_literal ()
+// CHECK:STDOUT:     %.loc11_44: type = converted %.loc11_43, constants.%empty_struct_type [template = constants.%empty_struct_type]
+// CHECK:STDOUT:     %ptr.loc11_44: type = ptr_type %empty_struct_type [template = constants.%ptr.c28]
+// CHECK:STDOUT:     %const.loc11_35: type = const_type %ptr.c28 [template = constants.%const.987]
+// CHECK:STDOUT:     %p.param: %ptr.bf9 = value_param runtime_param0
+// CHECK:STDOUT:     %.loc11_29: type = splice_block %ptr.loc11_29 [template = constants.%ptr.bf9] {
+// CHECK:STDOUT:       %.loc11_28: %empty_struct_type = struct_literal ()
+// CHECK:STDOUT:       %.loc11_21: type = converted %.loc11_28, constants.%empty_struct_type [template = constants.%empty_struct_type]
+// CHECK:STDOUT:       %const.loc11_21: type = const_type %empty_struct_type [template = constants.%const.c48]
+// CHECK:STDOUT:       %ptr.loc11_29: type = ptr_type %const.c48 [template = constants.%ptr.bf9]
+// CHECK:STDOUT:     }
+// CHECK:STDOUT:     %p: %ptr.bf9 = bind_name p, %p.param
+// CHECK:STDOUT:     %return.param: ref %const.987 = out_param runtime_param1
+// CHECK:STDOUT:     %return: ref %const.987 = return_slot %return.param
 // CHECK:STDOUT:   }
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
-// CHECK:STDOUT: fn @ConstMismatch(%p: const {}*) -> const ({}*) {
+// CHECK:STDOUT: fn @ConstMismatch(%p.param_patt: %ptr.bf9) -> %const.987 {
 // CHECK:STDOUT: !entry:
-// CHECK:STDOUT:   %p.ref: const {}* = name_ref p, %p
+// CHECK:STDOUT:   %p.ref: %ptr.bf9 = name_ref p, %p
+// CHECK:STDOUT:   %.loc19: %const.987 = converted %p.ref, <error> [template = <error>]
 // CHECK:STDOUT:   return <error>
 // CHECK:STDOUT: }
 // CHECK:STDOUT:

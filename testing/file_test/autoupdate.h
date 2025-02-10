@@ -34,37 +34,41 @@ class FileTestAutoupdater {
   };
 
   explicit FileTestAutoupdater(
-      const std::filesystem::path& file_test_path,
-      llvm::StringRef input_content,
+      const std::filesystem::path& file_test_path, std::string test_command,
+      std::string dump_command, llvm::StringRef input_content,
       const llvm::SmallVector<llvm::StringRef>& filenames,
-      int autoupdate_line_number,
+      int autoupdate_line_number, bool autoupdate_split,
       const llvm::SmallVector<FileTestLine>& non_check_lines,
-      llvm::StringRef stdout, llvm::StringRef stderr,
+      llvm::StringRef actual_stdout, llvm::StringRef actual_stderr,
       const std::optional<RE2>& default_file_re,
       const llvm::SmallVector<LineNumberReplacement>& line_number_replacements,
       std::function<void(std::string&)> do_extra_check_replacements)
       : file_test_path_(file_test_path),
+        test_command_(std::move(test_command)),
+        dump_command_(std::move(dump_command)),
         input_content_(input_content),
         filenames_(filenames),
         autoupdate_line_number_(autoupdate_line_number),
+        autoupdate_split_(autoupdate_split),
         non_check_lines_(non_check_lines),
         default_file_re_(default_file_re),
         line_number_replacements_(line_number_replacements),
         do_extra_check_replacements_(std::move(do_extra_check_replacements)),
         // BuildCheckLines should only be called after other member
         // initialization.
-        stdout_(BuildCheckLines(stdout, "STDOUT")),
-        stderr_(BuildCheckLines(stderr, "STDERR")),
-        any_attached_stdout_lines_(std::any_of(
-            stdout_.lines.begin(), stdout_.lines.end(),
+        stdout_(BuildCheckLines(actual_stdout, "STDOUT")),
+        stderr_(BuildCheckLines(actual_stderr, "STDERR")),
+        any_attached_stdout_lines_(llvm::any_of(
+            stdout_.lines,
             [&](const CheckLine& line) { return line.line_number() != -1; })),
         non_check_line_(non_check_lines_.begin()) {
     for (const auto& replacement : line_number_replacements_) {
-      CARBON_CHECK(replacement.has_file || default_file_re_)
-          << "For replacement with pattern `" << replacement.re->pattern()
-          << "` to have has_file=false, override GetDefaultFileRE.";
-      CARBON_CHECK(replacement.re->ok())
-          << "Invalid line replacement RE2: " << replacement.re->error();
+      CARBON_CHECK(replacement.has_file || default_file_re_,
+                   "For replacement with pattern `{0}` to have has_file=false, "
+                   "override GetDefaultFileRE.",
+                   replacement.re->pattern());
+      CARBON_CHECK(replacement.re->ok(), "Invalid line replacement RE2: {0}",
+                   replacement.re->error());
     }
   }
 
@@ -86,8 +90,24 @@ class FileTestAutoupdater {
     int line_number = -1;
   };
 
+  // A TIP line added by autoupdate. Not associated with any line in output.
+  class TipLine : public FileTestLineBase {
+   public:
+    explicit TipLine(std::string line)
+        : FileTestLineBase(-1, -1), line_(std::move(line)) {}
+
+    auto Print(llvm::raw_ostream& out) const -> void override { out << line_; }
+
+    auto is_blank() const -> bool override { return line_.empty(); }
+
+   private:
+    std::string line_;
+  };
+
   // A CHECK line which is integrated into autoupdate output.
-  class CheckLine : public FileTestLineBase {
+  //
+  // `final` because we use pointer arithmetic on this type.
+  class CheckLine final : public FileTestLineBase {
    public:
     // RE2 is passed by a pointer because it doesn't support std::optional.
     explicit CheckLine(FileAndLineNumber file_and_line_number, std::string line)
@@ -139,7 +159,7 @@ class FileTestAutoupdater {
   // Looks for the patterns in the line. Returns the first match, or defaulted
   // information if not found.
   auto GetFileAndLineNumber(
-      llvm::DenseMap<llvm::StringRef, int> file_to_number_map,
+      const llvm::DenseMap<llvm::StringRef, int>& file_to_number_map,
       int default_file_number, const std::string& check_line)
       -> FileAndLineNumber;
 
@@ -149,6 +169,9 @@ class FileTestAutoupdater {
   // Adds a non-check line to the new_lines and output_line_remap. The caller
   // still needs to advance the cursor when ready.
   auto AddRemappedNonCheckLine() -> void;
+
+  // Adds TIP lines for file_test usage.
+  auto AddTips() -> void;
 
   // Returns true if there's a CheckLine that should be added at
   // `to_line_number`.
@@ -171,13 +194,19 @@ class FileTestAutoupdater {
 
   // Passed-in state.
   const std::filesystem::path& file_test_path_;
+  std::string test_command_;
+  std::string dump_command_;
   llvm::StringRef input_content_;
   const llvm::SmallVector<llvm::StringRef>& filenames_;
   int autoupdate_line_number_;
+  bool autoupdate_split_;
   const llvm::SmallVector<FileTestLine>& non_check_lines_;
   const std::optional<RE2>& default_file_re_;
   const llvm::SmallVector<LineNumberReplacement>& line_number_replacements_;
   std::function<void(std::string&)> do_extra_check_replacements_;
+
+  // Generated TIP lines, from AddTips.
+  llvm::SmallVector<TipLine> tips_;
 
   // The constructed CheckLine list and cursor.
   CheckLines stdout_;

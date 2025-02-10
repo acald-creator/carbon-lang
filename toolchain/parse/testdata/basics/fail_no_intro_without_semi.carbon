@@ -3,10 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/basics/fail_no_intro_without_semi.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/basics/fail_no_intro_without_semi.carbon
 
-// CHECK:STDERR: fail_no_intro_without_semi.carbon:[[@LINE+3]]:1: ERROR: Unrecognized declaration introducer.
+// CHECK:STDERR: fail_no_intro_without_semi.carbon:[[@LINE+4]]:1: error: unrecognized declaration introducer [UnrecognizedDecl]
 // CHECK:STDERR: foo bar baz
 // CHECK:STDERR: ^~~
+// CHECK:STDERR:
 foo bar baz
 
 // CHECK:STDOUT: - filename: fail_no_intro_without_semi.carbon

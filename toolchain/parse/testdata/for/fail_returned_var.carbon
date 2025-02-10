@@ -3,12 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/for/fail_returned_var.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/for/fail_returned_var.carbon
 
 fn foo() -> i32 {
   // TODO: Should we allow this?
-  // CHECK:STDERR: fail_returned_var.carbon:[[@LINE+3]]:8: ERROR: Expected `var` declaration.
+  // CHECK:STDERR: fail_returned_var.carbon:[[@LINE+4]]:8: error: expected `var` declaration [ExpectedVariableDecl]
   // CHECK:STDERR:   for (returned var x: i32 in y) {
   // CHECK:STDERR:        ^~~~~~~~
+  // CHECK:STDERR:
   for (returned var x: i32 in y) {
     return var;
   }
@@ -18,7 +23,7 @@ fn foo() -> i32 {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'foo'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'foo'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:           {kind: 'IntTypeLiteral', text: 'i32'},

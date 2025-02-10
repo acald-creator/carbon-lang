@@ -13,6 +13,8 @@ cc_library(
     deps = [
         "//common:error",
         "//toolchain/diagnostics:diagnostic_emitter",
+        "//toolchain/diagnostics:file_diagnostics",
+        "//toolchain/diagnostics:format_providers",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -26,7 +28,7 @@ cc_test(
         "//common:check",
         "//testing/base:gtest_main",
         "//toolchain/diagnostics:diagnostic_emitter",
-        "@com_google_googletest//:gtest",
+        "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
 )

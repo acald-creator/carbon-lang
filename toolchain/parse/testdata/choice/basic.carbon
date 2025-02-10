@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/choice/basic.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/choice/basic.carbon
 
 choice Ordering {
   Less,
@@ -15,15 +19,15 @@ choice Ordering {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'ChoiceIntroducer', text: 'choice'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'Ordering'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameNotBeforeParams', text: 'Ordering'},
 // CHECK:STDOUT:       {kind: 'ChoiceDefinitionStart', text: '{', subtree_size: 3},
-// CHECK:STDOUT:       {kind: 'IdentifierName', text: 'Less'},
+// CHECK:STDOUT:       {kind: 'IdentifierNameNotBeforeParams', text: 'Less'},
 // CHECK:STDOUT:       {kind: 'ChoiceAlternativeListComma', text: ','},
-// CHECK:STDOUT:       {kind: 'IdentifierName', text: 'Equivalent'},
+// CHECK:STDOUT:       {kind: 'IdentifierNameNotBeforeParams', text: 'Equivalent'},
 // CHECK:STDOUT:       {kind: 'ChoiceAlternativeListComma', text: ','},
-// CHECK:STDOUT:       {kind: 'IdentifierName', text: 'Greater'},
+// CHECK:STDOUT:       {kind: 'IdentifierNameNotBeforeParams', text: 'Greater'},
 // CHECK:STDOUT:       {kind: 'ChoiceAlternativeListComma', text: ','},
-// CHECK:STDOUT:       {kind: 'IdentifierName', text: 'Incomparable'},
+// CHECK:STDOUT:       {kind: 'IdentifierNameNotBeforeParams', text: 'Incomparable'},
 // CHECK:STDOUT:     {kind: 'ChoiceDefinition', text: '}', subtree_size: 11},
 // CHECK:STDOUT:     {kind: 'FileEnd', text: ''},
 // CHECK:STDOUT:   ]

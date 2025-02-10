@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/check/context.h"
+#include "toolchain/check/handle.h"
 
 namespace Carbon::Check {
 
-auto HandleFileStart(Context& /*context*/, Parse::FileStartId /*parse_node*/)
+auto HandleParseNode(Context& /*context*/, Parse::FileStartId /*node_id*/)
     -> bool {
   // No action to perform.
   // TODO: We may want to push `FileStart` as a sentinel so that `Peek`s can't
@@ -14,7 +15,7 @@ auto HandleFileStart(Context& /*context*/, Parse::FileStartId /*parse_node*/)
   return true;
 }
 
-auto HandleFileEnd(Context& /*context*/, Parse::FileEndId /*parse_node*/)
+auto HandleParseNode(Context& /*context*/, Parse::FileEndId /*node_id*/)
     -> bool {
   // No action to perform.
   return true;

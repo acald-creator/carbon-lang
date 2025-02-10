@@ -15,18 +15,18 @@ filegroup(
     data = [
         "//explorer",
         "//installers/local:carbon",
-        "//language_server",
-        "//migrate_cpp:rewriter",
-        "//migrate_cpp/cpp_refactoring",
-        "//toolchain/driver:carbon",
-        "//utils/treesitter",
+        "//toolchain/install:carbon-busybox",
+        # The tree sitter rules can't be queried; evaluation fails on
+        # @platforms.
+        # "//utils/tree_sitter",
     ],
     tags = ["manual"],
 )
 
 genquery(
     name = "non_test_cc_deps.txt",
-    expression = "kind('cc.* rule', deps(//bazel/check_deps:non_test_cc_rules))",
+    expression =
+        "kind('cc.* rule', deps(//bazel/check_deps:non_test_cc_rules))",
     opts = [
         "--notool_deps",
         "--noimplicit_deps",

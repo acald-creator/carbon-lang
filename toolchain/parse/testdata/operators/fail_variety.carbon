@@ -3,23 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/parse/testdata/operators/fail_variety.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/parse/testdata/operators/fail_variety.carbon
 
 fn F() {
-  // CHECK:STDERR: fail_variety.carbon:[[@LINE+15]]:21: ERROR: Operator `=` can only be used as a complete statement.
+  // CHECK:STDERR: fail_variety.carbon:[[@LINE+20]]:21: error: operator `=` can only be used as a complete statement [StatementOperatorAsSubExpr]
   // CHECK:STDERR:   n = a * b + c * d = d * d << e & f - not g;
   // CHECK:STDERR:                     ^
-  // CHECK:STDERR: fail_variety.carbon:[[@LINE+12]]:29: ERROR: Parentheses are required to disambiguate operator precedence.
+  // CHECK:STDERR:
+  // CHECK:STDERR: fail_variety.carbon:[[@LINE+16]]:29: error: parentheses are required to disambiguate operator precedence [OperatorRequiresParentheses]
   // CHECK:STDERR:   n = a * b + c * d = d * d << e & f - not g;
   // CHECK:STDERR:                             ^~
-  // CHECK:STDERR: fail_variety.carbon:[[@LINE+9]]:34: ERROR: Parentheses are required to disambiguate operator precedence.
+  // CHECK:STDERR:
+  // CHECK:STDERR: fail_variety.carbon:[[@LINE+12]]:34: error: parentheses are required to disambiguate operator precedence [OperatorRequiresParentheses]
   // CHECK:STDERR:   n = a * b + c * d = d * d << e & f - not g;
   // CHECK:STDERR:                                  ^
-  // CHECK:STDERR: fail_variety.carbon:[[@LINE+6]]:38: ERROR: Parentheses are required to disambiguate operator precedence.
+  // CHECK:STDERR:
+  // CHECK:STDERR: fail_variety.carbon:[[@LINE+8]]:38: error: parentheses are required to disambiguate operator precedence [OperatorRequiresParentheses]
   // CHECK:STDERR:   n = a * b + c * d = d * d << e & f - not g;
   // CHECK:STDERR:                                      ^
-  // CHECK:STDERR: fail_variety.carbon:[[@LINE+3]]:40: ERROR: Parentheses are required around this unary `not` operator.
+  // CHECK:STDERR:
+  // CHECK:STDERR: fail_variety.carbon:[[@LINE+4]]:40: error: parentheses are required around this unary `not` operator [UnaryOperatorRequiresParentheses]
   // CHECK:STDERR:   n = a * b + c * d = d * d << e & f - not g;
   // CHECK:STDERR:                                        ^~~
+  // CHECK:STDERR:
   n = a * b + c * d = d * d << e & f - not g;
 }
 
@@ -27,7 +36,7 @@ fn F() {
 // CHECK:STDOUT:   parse_tree: [
 // CHECK:STDOUT:     {kind: 'FileStart', text: ''},
 // CHECK:STDOUT:         {kind: 'FunctionIntroducer', text: 'fn'},
-// CHECK:STDOUT:         {kind: 'IdentifierName', text: 'F'},
+// CHECK:STDOUT:         {kind: 'IdentifierNameBeforeParams', text: 'F'},
 // CHECK:STDOUT:           {kind: 'TuplePatternStart', text: '('},
 // CHECK:STDOUT:         {kind: 'TuplePattern', text: ')', subtree_size: 2},
 // CHECK:STDOUT:       {kind: 'FunctionDefinitionStart', text: '{', subtree_size: 5},

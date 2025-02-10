@@ -5,8 +5,10 @@
 #ifndef CARBON_TOOLCHAIN_CHECK_INST_BLOCK_STACK_H_
 #define CARBON_TOOLCHAIN_CHECK_INST_BLOCK_STACK_H_
 
+#include "common/array_stack.h"
 #include "llvm/ADT/SmallVector.h"
 #include "toolchain/sem_ir/file.h"
+#include "toolchain/sem_ir/formatter.h"
 
 namespace Carbon::Check {
 
@@ -25,16 +27,13 @@ class InstBlockStack {
   // Pushes an existing instruction block.
   auto Push(SemIR::InstBlockId id) -> void;
 
-  // Pushes a new instruction block. It will be invalid unless PeekOrAdd is
-  // called in order to support lazy allocation.
-  auto Push() -> void { Push(SemIR::InstBlockId::Invalid); }
+  // Pushes an existing instruction block with a set of instructions.
+  auto Push(SemIR::InstBlockId id, llvm::ArrayRef<SemIR::InstId> inst_ids)
+      -> void;
 
-  // Pushes the `GlobalInit` inst block onto the stack, this block is handled
-  // separately from the rest.
-  // This method shall be used in conjunction with `PopGlobalInit` method to
-  // allow emitting initialization instructions to `GlobalInit` block from
-  // separate parts of the tree, accumulating them all in one block.
-  auto PushGlobalInit() -> void;
+  // Pushes a new instruction block. It will be `None` unless PeekOrAdd is
+  // called in order to support lazy allocation.
+  auto Push() -> void { Push(SemIR::InstBlockId::None); }
 
   // Pushes a new unreachable code block.
   auto PushUnreachable() -> void { Push(SemIR::InstBlockId::Unreachable); }
@@ -45,66 +44,42 @@ class InstBlockStack {
   // 0.
   auto PeekOrAdd(int depth = 0) -> SemIR::InstBlockId;
 
-  // Pops the top instruction block. This will always return a valid instruction
-  // block; SemIR::InstBlockId::Empty is returned if one wasn't allocated.
+  // Pops the top instruction block. This will never return `None`; `Empty` is
+  // returned if one wasn't allocated.
   auto Pop() -> SemIR::InstBlockId;
 
   // Pops the top instruction block, and discards it if it hasn't had an ID
   // allocated.
   auto PopAndDiscard() -> void;
 
-  // Pops the `GlobalInit` inst block from the stack without finalizing it.
-  // `Pop` should be called at the end of the check phase, while `GlobalInit`
-  // is pushed, to finalize the block.
-  auto PopGlobalInit() -> void;
-
   // Adds the given instruction ID to the block at the top of the stack.
   auto AddInstId(SemIR::InstId inst_id) -> void {
-    CARBON_CHECK(!empty()) << "no current block";
-    stack_[size_ - 1].content.push_back(inst_id);
+    CARBON_CHECK(!empty(), "{0} has no current block", name_);
+    insts_stack_.AppendToTop(inst_id);
   }
 
   // Returns whether the current block is statically reachable.
   auto is_current_block_reachable() -> bool {
-    return size_ != 0 &&
-           stack_[size_ - 1].id != SemIR::InstBlockId::Unreachable;
+    return id_stack_.back() != SemIR::InstBlockId::Unreachable;
   }
 
   // Returns a view of the contents of the top instruction block on the stack.
-  auto PeekCurrentBlockContents() -> llvm::ArrayRef<SemIR::InstId> {
-    CARBON_CHECK(!empty()) << "no current block";
-    return stack_[size_ - 1].content;
+  auto PeekCurrentBlockContents() const -> llvm::ArrayRef<SemIR::InstId> {
+    CARBON_CHECK(!empty(), "no current block");
+    return insts_stack_.PeekArray();
   }
 
   // Prints the stack for a stack dump.
-  auto PrintForStackDump(llvm::raw_ostream& output) const -> void;
+  auto PrintForStackDump(int indent, llvm::raw_ostream& output) const -> void;
 
   // Runs verification that the processing cleanly finished.
-  auto VerifyOnFinish() const -> void { CARBON_CHECK(empty()) << size_; }
+  auto VerifyOnFinish() const -> void {
+    CARBON_CHECK(empty(), "{0} still has {1} entries", name_, id_stack_.size());
+  }
 
-  auto empty() const -> bool { return size_ == 0; }
+  auto empty() const -> bool { return id_stack_.empty(); }
 
  private:
-  struct StackEntry {
-    // Preallocate an arbitrary size for the stack entries.
-    // TODO: Perform measurements to pick a good starting size to avoid
-    // reallocation.
-    StackEntry() { content.reserve(32); }
-
-    auto Reset(SemIR::InstBlockId new_id) {
-      id = new_id;
-      content.clear();
-    }
-
-    // The block ID, if one has been allocated, Invalid if no block has been
-    // allocated, or Unreachable if this block is known to be unreachable.
-    SemIR::InstBlockId id = SemIR::InstBlockId::Invalid;
-
-    // The content of the block. Stored as a vector rather than as a SmallVector
-    // to reduce the cost of resizing `stack_` and performing swaps.
-    std::vector<SemIR::InstId> content;
-  };
-
   // A name for debugging.
   llvm::StringLiteral name_;
 
@@ -114,14 +89,12 @@ class InstBlockStack {
   // Whether to print verbose output.
   llvm::raw_ostream* vlog_stream_;
 
-  std::vector<SemIR::InstId> init_block_;
+  // The stack of block IDs. A value if allocated, `None` if no block has been
+  // allocated, or `Unreachable` if this block is known to be unreachable.
+  llvm::SmallVector<SemIR::InstBlockId> id_stack_;
 
-  // The actual stack.
-  llvm::SmallVector<StackEntry> stack_;
-
-  // The size of the stack. Entries after this in `stack_` are kept around so
-  // that we can reuse the allocated buffer for their content.
-  int size_ = 0;
+  // The stack of insts in each block.
+  ArrayStack<SemIR::InstId> insts_stack_;
 };
 
 }  // namespace Carbon::Check

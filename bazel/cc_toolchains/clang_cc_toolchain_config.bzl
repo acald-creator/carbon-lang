@@ -111,6 +111,8 @@ def _impl(ctx):
     # https://github.com/llvm/llvm-project/issues/70384
     if not clang_version or clang_version == 18:
         missing_field_init_flags = ["-Wno-missing-field-initializers"]
+    elif clang_version > 18:
+        missing_field_init_flags = ["-Wno-missing-designated-field-initializers"]
     else:
         missing_field_init_flags = []
 
@@ -141,10 +143,25 @@ def _impl(ctx):
                             "-Wself-assign",
                             "-Wimplicit-fallthrough",
                             "-Wctad-maybe-unsupported",
+                            "-Wextra-semi",
+                            "-Wmissing-prototypes",
+                            "-Wzero-as-null-pointer-constant",
                             "-Wdelete-non-virtual-dtor",
                             # Don't warn on external code as we can't
-                            # necessarily patch it easily.
-                            "--system-header-prefix=external/",
+                            # necessarily patch it easily. Note that these have
+                            # to be initial directories in the `#include` line.
+                            "--system-header-prefix=absl/",
+                            "--system-header-prefix=benchmark/",
+                            "--system-header-prefix=boost/",
+                            "--system-header-prefix=clang-tools-extra/",
+                            "--system-header-prefix=clang/",
+                            "--system-header-prefix=gmock/",
+                            "--system-header-prefix=gtest/",
+                            "--system-header-prefix=libfuzzer/",
+                            "--system-header-prefix=llvm/",
+                            "--system-header-prefix=re2/",
+                            "--system-header-prefix=tools/cpp/",
+                            "--system-header-prefix=tree_sitter/",
                             # Compile actions shouldn't link anything.
                             "-c",
                         ] + missing_field_init_flags,
@@ -242,10 +259,6 @@ def _impl(ctx):
                 actions = all_link_actions,
                 flag_groups = [
                     flag_group(
-                        flags = ["-Wl,--gdb-index"],
-                        expand_if_available = "is_using_fission",
-                    ),
-                    flag_group(
                         flags = ["-Wl,-S"],
                         expand_if_available = "strip_debug_symbols",
                     ),
@@ -332,6 +345,7 @@ def _impl(ctx):
     # minimal settings if both are enabled.
     minimal_debug_info_flags = feature(
         name = "minimal_debug_info_flags",
+        implies = ["debug_info_compression_flags"],
         flag_sets = [
             flag_set(
                 actions = codegen_compile_actions,
@@ -343,9 +357,9 @@ def _impl(ctx):
             ),
         ],
     )
-    default_debug_info_flags = feature(
-        name = "default_debug_info_flags",
-        enabled = True,
+    debug_info_flags = feature(
+        name = "debug_info_flags",
+        implies = ["debug_info_compression_flags"],
         flag_sets = [
             flag_set(
                 actions = codegen_compile_actions,
@@ -353,18 +367,89 @@ def _impl(ctx):
                     flag_group(
                         flags = ["-g"],
                     ),
+                    flag_group(
+                        flags = ["-gsplit-dwarf"],
+                        expand_if_available = "per_object_debug_info_file",
+                    ),
                 ]),
-                with_features = [with_feature_set(features = ["dbg"])],
             ),
+        ],
+    )
+    debug_info_compression_flags = feature(
+        name = "debug_info_compression_flags",
+        flag_sets = [
+            flag_set(
+                actions = codegen_compile_actions + all_link_actions,
+                flag_groups = ([
+                    flag_group(
+                        flags = ["-gz"],
+                    ),
+                ]),
+            ),
+        ],
+    )
+
+    # Define a set of mutually exclusive debugger flags.
+    debugger_flags = feature(name = "debugger_flags")
+    lldb_flags = feature(
+        # Use a convenient name for users to select if needed.
+        name = "lldb_flags",
+        # Default enable LLDB-optimized flags whenever debugging.
+        enabled = True,
+        requires = [feature_set(features = ["debug_info_flags"])],
+        provides = ["debugger_flags"],
+        flag_sets = [
             flag_set(
                 actions = codegen_compile_actions,
+                flag_groups = ([
+                    flag_group(
+                        flags = [
+                            "-glldb",
+                            "-gpubnames",
+                            "-gsimple-template-names",
+                        ],
+                    ),
+                ]),
+            ),
+        ],
+    )
+    gdb_flags = feature(
+        # Use a convenient name for users to select if needed.
+        name = "gdb_flags",
+        requires = [feature_set(features = ["debug_info_flags"])],
+        provides = ["debugger_flags"],
+        flag_sets = [
+            flag_set(
+                actions = codegen_compile_actions,
+                flag_groups = ([
+                    flag_group(
+                        flags = ["-ggdb"],
+                    ),
+                    flag_group(
+                        flags = ["-ggnu-pubnames"],
+                    ),
+                ]),
+            ),
+            flag_set(
+                actions = all_link_actions,
                 flag_groups = [
                     flag_group(
-                        flags = ["-gsplit-dwarf", "-g"],
-                        expand_if_available = "per_object_debug_info_file",
+                        flags = ["-Wl,--gdb-index"],
                     ),
                 ],
             ),
+        ],
+    )
+
+    # An enabled feature that requires the `dbg` compilation mode. This is used
+    # to toggle on more general features to use by default, while allowing those
+    # general features to be explicitly enabled where needed.
+    enable_in_dbg = feature(
+        name = "enable_in_dbg",
+        enabled = True,
+        requires = [feature_set(["dbg"])],
+        implies = [
+            "debug_info_flags",
         ],
     )
 
@@ -466,8 +551,7 @@ def _impl(ctx):
 
     sanitizer_common_flags = feature(
         name = "sanitizer_common_flags",
-        requires = [feature_set(["nonhost"])],
-        implies = ["minimal_optimization_flags", "minimal_debug_info_flags", "preserve_call_stacks"],
+        implies = ["minimal_debug_info_flags", "preserve_call_stacks"],
     )
 
     # Separated from the feature above so it can only be included on platforms
@@ -487,16 +571,19 @@ def _impl(ctx):
 
     asan = feature(
         name = "asan",
-        requires = [feature_set(["nonhost"])],
         implies = ["sanitizer_common_flags"],
         flag_sets = [flag_set(
             actions = all_compile_actions + all_link_actions,
             flag_groups = [flag_group(flags = [
                 "-fsanitize=address,undefined,nullability",
                 "-fsanitize-address-use-after-scope",
+                # Outlining is almost always the right tradeoff for our
+                # sanitizer usage where we're more pressured on generated code
+                # size than runtime performance.
+                "-fsanitize-address-outline-instrumentation",
                 # We don't need the recovery behavior of UBSan as we expect
                 # builds to be clean. Not recovering is a bit cheaper.
-                "-fno-sanitize-recover=undefined",
+                "-fno-sanitize-recover=undefined,nullability",
                 # Don't embed the full path name for files. This limits the size
                 # and combined with line numbers is unlikely to result in many
                 # ambiguities.
@@ -504,6 +591,24 @@ def _impl(ctx):
                 # Needed due to clang AST issues, such as in
                 # clang/AST/Redeclarable.h line 199.
                 "-fno-sanitize=vptr",
+            ])],
+        )],
+    )
+
+    # A feature that further reduces the generated code size of our the ASan
+    # feature, but at the cost of lower quality diagnostics. This is enabled
+    # along with ASan in our fastbuild configuration, but can be disabled
+    # explicitly to get better error messages.
+    asan_min_size = feature(
+        name = "asan_min_size",
+        requires = [feature_set(["asan"])],
+        flag_sets = [flag_set(
+            actions = all_compile_actions + all_link_actions,
+            flag_groups = [flag_group(flags = [
+                # Force two UBSan checks that have especially large code size
+                # cost to use the minimal branch to a trapping instruction model
+                # instead of the full diagnostic.
+                "-fsanitize-trap=alignment,null",
             ])],
         )],
     )
@@ -522,17 +627,23 @@ def _impl(ctx):
         )],
     )
 
-    enable_asan_in_fastbuild = feature(
-        name = "enable_asan_in_fastbuild",
+    # An enabled feature that requires the `fastbuild` compilation. This is used
+    # to toggle general features on by default, while allowing them to be
+    # directly enabled and disabled more generally as desired.
+    enable_in_fastbuild = feature(
+        name = "enable_in_fastbuild",
         enabled = True,
-        requires = [feature_set(["nonhost", "fastbuild"])],
-        implies = ["asan"],
+        requires = [feature_set(["fastbuild"])],
+        implies = [
+            "asan",
+            "asan_min_size",
+            "minimal_optimization_flags",
+            "minimal_debug_info_flags",
+        ],
     )
 
     fuzzer = feature(
         name = "fuzzer",
-        requires = [feature_set(["nonhost"])],
-        implies = ["asan"],
         flag_sets = [flag_set(
             actions = all_compile_actions + all_link_actions,
             flag_groups = [flag_group(flags = [
@@ -543,10 +654,21 @@ def _impl(ctx):
 
     if clang_version and clang_version <= 16:
         libcpp_debug_flags = ["-D_LIBCPP_ENABLE_ASSERTIONS=1"]
-    else:
+        libcpp_release_flags = ["-D_LIBCPP_ENABLE_ASSERTIONS=0"]
+    elif clang_version and clang_version <= 17:
         # Clang 17 deprecates LIBCPP_ENABLE_ASSERTIONS in favor of
-        # HARDENED_MODE.
+        # HARDENED_MODE and DEBUG_MODE.
         libcpp_debug_flags = ["-D_LIBCPP_ENABLE_HARDENED_MODE=1"]
+        libcpp_release_flags = ["-D_LIBCPP_ENABLE_HARDENED_MODE=1"]
+    else:
+        # Clang 18 changes HARDENED_MODE to use 4 values:
+        # https://releases.llvm.org/18.1.0/projects/libcxx/docs/Hardening.html#hardening-modes
+        libcpp_debug_flags = [
+            "-D_LIBCPP_ENABLE_HARDENED_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
+        ]
+        libcpp_release_flags = [
+            "-D_LIBCPP_ENABLE_HARDENED_MODE=_LIBCPP_HARDENING_MODE_FAST",
+        ]
 
     linux_flags_feature = feature(
         name = "linux_flags",
@@ -591,6 +713,13 @@ def _impl(ctx):
                 flag_groups = [flag_group(flags = libcpp_debug_flags)],
                 with_features = [
                     with_feature_set(not_features = ["opt"]),
+                ],
+            ),
+            flag_set(
+                actions = all_compile_actions,
+                flag_groups = [flag_group(flags = libcpp_release_flags)],
+                with_features = [
+                    with_feature_set(features = ["opt"]),
                 ],
             ),
             flag_set(
@@ -981,11 +1110,20 @@ def _impl(ctx):
         feature(name = "fastbuild"),
         feature(name = "host"),
         feature(name = "no_legacy_features"),
-        feature(name = "nonhost"),
         feature(name = "opt"),
         feature(name = "supports_dynamic_linker", enabled = ctx.attr.target_os == "linux"),
         feature(name = "supports_pic", enabled = True),
         feature(name = "supports_start_end_lib", enabled = ctx.attr.target_os == "linux"),
+
+        # Enable split debug info whenever debug info is requested.
+        feature(
+            name = "per_object_debug_info",
+            enabled = True,
+            # This has to be directly conditioned on requesting debug info at
+            # all, otherwise Bazel will look for an extra output file and not
+            # find one.
+            requires = [feature_set(features = ["debug_info_flags"])],
+        ),
     ]
 
     # The order of the features determines the relative order of flags used.
@@ -995,12 +1133,18 @@ def _impl(ctx):
         minimal_optimization_flags,
         default_optimization_flags,
         minimal_debug_info_flags,
-        default_debug_info_flags,
+        debug_info_flags,
+        debug_info_compression_flags,
+        debugger_flags,
+        lldb_flags,
+        gdb_flags,
+        enable_in_dbg,
         preserve_call_stacks,
         sysroot_feature,
         sanitizer_common_flags,
         asan,
-        enable_asan_in_fastbuild,
+        asan_min_size,
+        enable_in_fastbuild,
         fuzzer,
         layering_check,
         module_maps,
@@ -1061,10 +1205,13 @@ def _impl(ctx):
         target_system_name = identifier,
         target_cpu = ctx.attr.target_cpu,
 
+        # This is used to expose a "flag" that `config_setting` rules can use to
+        # determine if the compiler is Clang.
+        compiler = "clang",
+
         # These attributes aren't meaningful at all so just use placeholder
         # values.
         target_libc = "local",
-        compiler = "local",
         abi_version = "local",
         abi_libc_version = "local",
 

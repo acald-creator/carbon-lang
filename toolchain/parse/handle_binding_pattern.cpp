@@ -2,7 +2,9 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "toolchain/diagnostics/format_providers.h"
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 
@@ -13,32 +15,34 @@ auto HandleBindingPattern(Context& context) -> void {
   // for the full BindingPattern.
   if (auto token = context.ConsumeIf(Lex::TokenKind::Template)) {
     context.PushState({.state = State::BindingPatternTemplate,
+                       .in_var_pattern = state.in_var_pattern,
                        .token = *token,
                        .subtree_start = state.subtree_start});
   }
 
   if (auto token = context.ConsumeIf(Lex::TokenKind::Addr)) {
     context.PushState({.state = State::BindingPatternAddr,
+                       .in_var_pattern = state.in_var_pattern,
                        .token = *token,
                        .subtree_start = state.subtree_start});
   }
 
   // Handle an invalid pattern introducer for parameters and variables.
-  auto on_error = [&]() {
-    CARBON_DIAGNOSTIC(ExpectedBindingPattern, Error,
-                      "Expected binding pattern.");
-    context.emitter().Emit(*context.position(), ExpectedBindingPattern);
-    // Add a placeholder for the type.
-    context.AddLeafNode(NodeKind::InvalidParse, *context.position(),
-                        /*has_error=*/true);
-    state.has_error = true;
-    context.PushState(state, State::BindingPatternFinishAsRegular);
+  auto on_error = [&](bool expected_name) {
+    if (!state.has_error) {
+      CARBON_DIAGNOSTIC(ExpectedBindingPattern, Error,
+                        "expected {0:name|`:` or `:!`} in binding pattern",
+                        BoolAsSelect);
+      context.emitter().Emit(*context.position(), ExpectedBindingPattern,
+                             expected_name);
+      state.has_error = true;
+    }
   };
 
   // The first item should be an identifier or `self`.
   bool has_name = false;
   if (auto identifier = context.ConsumeIf(Lex::TokenKind::Identifier)) {
-    context.AddLeafNode(NodeKind::IdentifierName, *identifier);
+    context.AddLeafNode(NodeKind::IdentifierNameNotBeforeParams, *identifier);
     has_name = true;
   } else if (auto self =
                  context.ConsumeIf(Lex::TokenKind::SelfValueIdentifier)) {
@@ -49,10 +53,9 @@ auto HandleBindingPattern(Context& context) -> void {
   }
   if (!has_name) {
     // Add a placeholder for the name.
-    context.AddLeafNode(NodeKind::IdentifierName, *context.position(),
-                        /*has_error=*/true);
-    on_error();
-    return;
+    context.AddLeafNode(NodeKind::IdentifierNameNotBeforeParams,
+                        *context.position(), /*has_error=*/true);
+    on_error(/*expected_name=*/true);
   }
 
   if (auto kind = context.PositionKind();
@@ -65,17 +68,36 @@ auto HandleBindingPattern(Context& context) -> void {
     context.PushState(state);
     context.PushStateForExpr(PrecedenceGroup::ForType());
   } else {
-    on_error();
-    return;
+    on_error(/*expected_name=*/false);
+    // Add a substitute for a type node.
+    context.AddInvalidParse(*context.position());
+    context.PushState(state, State::BindingPatternFinishAsRegular);
   }
 }
 
 // Handles BindingPatternFinishAs(Generic|Regular).
-static auto HandleBindingPatternFinish(Context& context, NodeKind node_kind)
+static auto HandleBindingPatternFinish(Context& context, bool is_compile_time)
     -> void {
   auto state = context.PopState();
 
-  context.AddNode(node_kind, state.token, state.subtree_start, state.has_error);
+  auto node_kind = NodeKind::InvalidParse;
+  if (state.in_var_pattern) {
+    node_kind = NodeKind::VarBindingPattern;
+    if (is_compile_time) {
+      CARBON_DIAGNOSTIC(
+          CompileTimeBindingInVarDecl, Error,
+          "`var` declaration cannot declare a compile-time binding");
+      context.emitter().Emit(*context.position(), CompileTimeBindingInVarDecl);
+      state.has_error = true;
+    }
+  } else {
+    if (is_compile_time) {
+      node_kind = NodeKind::CompileTimeBindingPattern;
+    } else {
+      node_kind = NodeKind::LetBindingPattern;
+    }
+  }
+  context.AddNode(node_kind, state.token, state.has_error);
 
   // Propagate errors to the parent state so that they can take different
   // actions on invalid patterns.
@@ -85,18 +107,17 @@ static auto HandleBindingPatternFinish(Context& context, NodeKind node_kind)
 }
 
 auto HandleBindingPatternFinishAsGeneric(Context& context) -> void {
-  HandleBindingPatternFinish(context, NodeKind::CompileTimeBindingPattern);
+  HandleBindingPatternFinish(context, /*is_compile_time=*/true);
 }
 
 auto HandleBindingPatternFinishAsRegular(Context& context) -> void {
-  HandleBindingPatternFinish(context, NodeKind::BindingPattern);
+  HandleBindingPatternFinish(context, /*is_compile_time=*/false);
 }
 
 auto HandleBindingPatternAddr(Context& context) -> void {
   auto state = context.PopState();
 
-  context.AddNode(NodeKind::Addr, state.token, state.subtree_start,
-                  state.has_error);
+  context.AddNode(NodeKind::Addr, state.token, state.has_error);
 
   // If an error was encountered, propagate it while adding a node.
   if (state.has_error) {
@@ -107,8 +128,7 @@ auto HandleBindingPatternAddr(Context& context) -> void {
 auto HandleBindingPatternTemplate(Context& context) -> void {
   auto state = context.PopState();
 
-  context.AddNode(NodeKind::Template, state.token, state.subtree_start,
-                  state.has_error);
+  context.AddNode(NodeKind::Template, state.token, state.has_error);
 
   // If an error was encountered, propagate it while adding a node.
   if (state.has_error) {

@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // AUTOUPDATE
+// TIP: To test this file alone, run:
+// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/check/testdata/return/tuple.carbon
+// TIP: To dump output, run:
+// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/check/testdata/return/tuple.carbon
 
 
 fn Main() -> (i32, i32) {
@@ -12,36 +16,82 @@ fn Main() -> (i32, i32) {
 // CHECK:STDOUT: --- tuple.carbon
 // CHECK:STDOUT:
 // CHECK:STDOUT: constants {
-// CHECK:STDOUT:   %.1: type = tuple_type (type, type) [template]
-// CHECK:STDOUT:   %.2: type = tuple_type (i32, i32) [template]
-// CHECK:STDOUT:   %.3: type = ptr_type (i32, i32) [template]
-// CHECK:STDOUT:   %.4: i32 = int_literal 15 [template]
-// CHECK:STDOUT:   %.5: i32 = int_literal 35 [template]
-// CHECK:STDOUT:   %.6: (i32, i32) = tuple_value (%.4, %.5) [template]
+// CHECK:STDOUT:   %int_32: Core.IntLiteral = int_value 32 [template]
+// CHECK:STDOUT:   %i32: type = class_type @Int, @Int(%int_32) [template]
+// CHECK:STDOUT:   %tuple.type.24b: type = tuple_type (type, type) [template]
+// CHECK:STDOUT:   %tuple.type.d07: type = tuple_type (%i32, %i32) [template]
+// CHECK:STDOUT:   %Main.type: type = fn_type @Main [template]
+// CHECK:STDOUT:   %Main: %Main.type = struct_value () [template]
+// CHECK:STDOUT:   %int_15.447: Core.IntLiteral = int_value 15 [template]
+// CHECK:STDOUT:   %int_35.c79: Core.IntLiteral = int_value 35 [template]
+// CHECK:STDOUT:   %tuple.type.f94: type = tuple_type (Core.IntLiteral, Core.IntLiteral) [template]
+// CHECK:STDOUT:   %ImplicitAs.type.205: type = facet_type <@ImplicitAs, @ImplicitAs(%i32)> [template]
+// CHECK:STDOUT:   %Convert.type.1b6: type = fn_type @Convert.1, @ImplicitAs(%i32) [template]
+// CHECK:STDOUT:   %impl_witness.d39: <witness> = impl_witness (imports.%Core.import_ref.a5b), @impl.1(%int_32) [template]
+// CHECK:STDOUT:   %Convert.type.035: type = fn_type @Convert.2, @impl.1(%int_32) [template]
+// CHECK:STDOUT:   %Convert.956: %Convert.type.035 = struct_value () [template]
+// CHECK:STDOUT:   %ImplicitAs.facet: %ImplicitAs.type.205 = facet_value Core.IntLiteral, %impl_witness.d39 [template]
+// CHECK:STDOUT:   %.a0b: type = fn_type_with_self_type %Convert.type.1b6, %ImplicitAs.facet [template]
+// CHECK:STDOUT:   %Convert.bound.75f: <bound method> = bound_method %int_15.447, %Convert.956 [template]
+// CHECK:STDOUT:   %Convert.specific_fn.c46: <specific function> = specific_function %Convert.bound.75f, @Convert.2(%int_32) [template]
+// CHECK:STDOUT:   %int_15.7f7: %i32 = int_value 15 [template]
+// CHECK:STDOUT:   %Convert.bound.76a: <bound method> = bound_method %int_35.c79, %Convert.956 [template]
+// CHECK:STDOUT:   %Convert.specific_fn.9b5: <specific function> = specific_function %Convert.bound.76a, @Convert.2(%int_32) [template]
+// CHECK:STDOUT:   %int_35.c78: %i32 = int_value 35 [template]
+// CHECK:STDOUT:   %tuple: %tuple.type.d07 = tuple_value (%int_15.7f7, %int_35.c78) [template]
+// CHECK:STDOUT: }
+// CHECK:STDOUT:
+// CHECK:STDOUT: imports {
+// CHECK:STDOUT:   %Core: <namespace> = namespace file.%Core.import, [template] {
+// CHECK:STDOUT:     .Int = %Core.Int
+// CHECK:STDOUT:     .ImplicitAs = %Core.ImplicitAs
+// CHECK:STDOUT:     import Core//prelude
+// CHECK:STDOUT:     import Core//prelude/...
+// CHECK:STDOUT:   }
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
 // CHECK:STDOUT: file {
 // CHECK:STDOUT:   package: <namespace> = namespace [template] {
-// CHECK:STDOUT:     .Main = %Main
+// CHECK:STDOUT:     .Core = imports.%Core
+// CHECK:STDOUT:     .Main = %Main.decl
 // CHECK:STDOUT:   }
-// CHECK:STDOUT:   %Main: <function> = fn_decl @Main [template] {
-// CHECK:STDOUT:     %.loc8_23.1: (type, type) = tuple_literal (i32, i32)
-// CHECK:STDOUT:     %.loc8_23.2: type = converted %.loc8_23.1, constants.%.2 [template = constants.%.2]
-// CHECK:STDOUT:     @Main.%return: ref (i32, i32) = var <return slot>
+// CHECK:STDOUT:   %Core.import = import Core
+// CHECK:STDOUT:   %Main.decl: %Main.type = fn_decl @Main [template = constants.%Main] {
+// CHECK:STDOUT:     %return.patt: %tuple.type.d07 = return_slot_pattern
+// CHECK:STDOUT:     %return.param_patt: %tuple.type.d07 = out_param_pattern %return.patt, runtime_param0
+// CHECK:STDOUT:   } {
+// CHECK:STDOUT:     %int_32.loc12_15: Core.IntLiteral = int_value 32 [template = constants.%int_32]
+// CHECK:STDOUT:     %i32.loc12_15: type = class_type @Int, @Int(constants.%int_32) [template = constants.%i32]
+// CHECK:STDOUT:     %int_32.loc12_20: Core.IntLiteral = int_value 32 [template = constants.%int_32]
+// CHECK:STDOUT:     %i32.loc12_20: type = class_type @Int, @Int(constants.%int_32) [template = constants.%i32]
+// CHECK:STDOUT:     %.loc12_23.1: %tuple.type.24b = tuple_literal (%i32.loc12_15, %i32.loc12_20)
+// CHECK:STDOUT:     %.loc12_23.2: type = converted %.loc12_23.1, constants.%tuple.type.d07 [template = constants.%tuple.type.d07]
+// CHECK:STDOUT:     %return.param: ref %tuple.type.d07 = out_param runtime_param0
+// CHECK:STDOUT:     %return: ref %tuple.type.d07 = return_slot %return.param
 // CHECK:STDOUT:   }
 // CHECK:STDOUT: }
 // CHECK:STDOUT:
-// CHECK:STDOUT: fn @Main() -> %return: (i32, i32) {
+// CHECK:STDOUT: fn @Main() -> %return.param_patt: %tuple.type.d07 {
 // CHECK:STDOUT: !entry:
-// CHECK:STDOUT:   %.loc9_11: i32 = int_literal 15 [template = constants.%.4]
-// CHECK:STDOUT:   %.loc9_15: i32 = int_literal 35 [template = constants.%.5]
-// CHECK:STDOUT:   %.loc9_17.1: (i32, i32) = tuple_literal (%.loc9_11, %.loc9_15)
-// CHECK:STDOUT:   %.loc9_17.2: ref i32 = tuple_access %return, element0
-// CHECK:STDOUT:   %.loc9_17.3: init i32 = initialize_from %.loc9_11 to %.loc9_17.2 [template = constants.%.4]
-// CHECK:STDOUT:   %.loc9_17.4: ref i32 = tuple_access %return, element1
-// CHECK:STDOUT:   %.loc9_17.5: init i32 = initialize_from %.loc9_15 to %.loc9_17.4 [template = constants.%.5]
-// CHECK:STDOUT:   %.loc9_17.6: init (i32, i32) = tuple_init (%.loc9_17.3, %.loc9_17.5) to %return [template = constants.%.6]
-// CHECK:STDOUT:   %.loc9_17.7: init (i32, i32) = converted %.loc9_17.1, %.loc9_17.6 [template = constants.%.6]
-// CHECK:STDOUT:   return %.loc9_17.7
+// CHECK:STDOUT:   %int_15: Core.IntLiteral = int_value 15 [template = constants.%int_15.447]
+// CHECK:STDOUT:   %int_35: Core.IntLiteral = int_value 35 [template = constants.%int_35.c79]
+// CHECK:STDOUT:   %.loc13_17.1: %tuple.type.f94 = tuple_literal (%int_15, %int_35)
+// CHECK:STDOUT:   %impl.elem0.loc13_17.1: %.a0b = impl_witness_access constants.%impl_witness.d39, element0 [template = constants.%Convert.956]
+// CHECK:STDOUT:   %bound_method.loc13_17.1: <bound method> = bound_method %int_15, %impl.elem0.loc13_17.1 [template = constants.%Convert.bound.75f]
+// CHECK:STDOUT:   %specific_fn.loc13_17.1: <specific function> = specific_function %bound_method.loc13_17.1, @Convert.2(constants.%int_32) [template = constants.%Convert.specific_fn.c46]
+// CHECK:STDOUT:   %int.convert_checked.loc13_17.1: init %i32 = call %specific_fn.loc13_17.1(%int_15) [template = constants.%int_15.7f7]
+// CHECK:STDOUT:   %.loc13_17.2: init %i32 = converted %int_15, %int.convert_checked.loc13_17.1 [template = constants.%int_15.7f7]
+// CHECK:STDOUT:   %tuple.elem0: ref %i32 = tuple_access %return, element0
+// CHECK:STDOUT:   %.loc13_17.3: init %i32 = initialize_from %.loc13_17.2 to %tuple.elem0 [template = constants.%int_15.7f7]
+// CHECK:STDOUT:   %impl.elem0.loc13_17.2: %.a0b = impl_witness_access constants.%impl_witness.d39, element0 [template = constants.%Convert.956]
+// CHECK:STDOUT:   %bound_method.loc13_17.2: <bound method> = bound_method %int_35, %impl.elem0.loc13_17.2 [template = constants.%Convert.bound.76a]
+// CHECK:STDOUT:   %specific_fn.loc13_17.2: <specific function> = specific_function %bound_method.loc13_17.2, @Convert.2(constants.%int_32) [template = constants.%Convert.specific_fn.9b5]
+// CHECK:STDOUT:   %int.convert_checked.loc13_17.2: init %i32 = call %specific_fn.loc13_17.2(%int_35) [template = constants.%int_35.c78]
+// CHECK:STDOUT:   %.loc13_17.4: init %i32 = converted %int_35, %int.convert_checked.loc13_17.2 [template = constants.%int_35.c78]
+// CHECK:STDOUT:   %tuple.elem1: ref %i32 = tuple_access %return, element1
+// CHECK:STDOUT:   %.loc13_17.5: init %i32 = initialize_from %.loc13_17.4 to %tuple.elem1 [template = constants.%int_35.c78]
+// CHECK:STDOUT:   %.loc13_17.6: init %tuple.type.d07 = tuple_init (%.loc13_17.3, %.loc13_17.5) to %return [template = constants.%tuple]
+// CHECK:STDOUT:   %.loc13_18: init %tuple.type.d07 = converted %.loc13_17.1, %.loc13_17.6 [template = constants.%tuple]
+// CHECK:STDOUT:   return %.loc13_18 to %return
 // CHECK:STDOUT: }
 // CHECK:STDOUT:

@@ -3,25 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "toolchain/parse/context.h"
+#include "toolchain/parse/handle.h"
 
 namespace Carbon::Parse {
 
 // Handles VarAs(Decl|Returned).
 static auto HandleVar(Context& context, State finish_state,
-                      Lex::TokenIndex returned_token = Lex::TokenIndex::Invalid)
+                      Lex::TokenIndex returned_token = Lex::TokenIndex::None)
     -> void {
   auto state = context.PopState();
 
   // The finished variable declaration will start at the `var` or `returned`.
   context.PushState(state, finish_state);
 
+  // TODO: is there a cleaner way to give VarAfterPattern access to the `var`
+  // token?
+  state.token = *(context.position() - 1);
   context.PushState(state, State::VarAfterPattern);
 
-  if (returned_token.is_valid()) {
+  if (returned_token.has_value()) {
     context.AddLeafNode(NodeKind::ReturnedModifier, returned_token);
   }
 
-  context.PushState(State::Pattern);
+  context.PushStateForPattern(State::Pattern, /*in_var_pattern=*/true);
 }
 
 auto HandleVarAsDecl(Context& context) -> void {
@@ -33,7 +37,7 @@ auto HandleVarAsReturned(Context& context) -> void {
 
   if (!context.PositionIs(Lex::TokenKind::Var)) {
     CARBON_DIAGNOSTIC(ExpectedVarAfterReturned, Error,
-                      "Expected `var` after `returned`.");
+                      "expected `var` after `returned`");
     context.emitter().Emit(*context.position(), ExpectedVarAfterReturned);
     context.AddLeafNode(NodeKind::EmptyDecl,
                         context.SkipPastLikelyEnd(returned_token),
@@ -65,6 +69,8 @@ auto HandleVarAfterPattern(Context& context) -> void {
     }
   }
 
+  context.AddNode(NodeKind::VariablePattern, state.token, state.has_error);
+
   if (context.PositionIs(Lex::TokenKind::Equal)) {
     context.AddLeafNode(NodeKind::VariableInitializer,
                         context.ConsumeChecked(Lex::TokenKind::Equal));
@@ -80,35 +86,35 @@ auto HandleVarFinishAsDecl(Context& context) -> void {
     end_token = context.Consume();
   } else {
     // TODO: Disambiguate between statement and member declaration.
-    context.EmitExpectedDeclSemi(Lex::TokenKind::Var);
+    context.DiagnoseExpectedDeclSemi(Lex::TokenKind::Var);
     state.has_error = true;
     end_token = context.SkipPastLikelyEnd(state.token);
   }
-  context.AddNode(NodeKind::VariableDecl, end_token, state.subtree_start,
-                  state.has_error);
+  context.AddNode(NodeKind::VariableDecl, end_token, state.has_error);
 }
 
 auto HandleVarFinishAsFor(Context& context) -> void {
   auto state = context.PopState();
+
+  context.AddNode(NodeKind::VariablePattern, state.token, state.has_error);
 
   auto end_token = state.token;
   if (context.PositionIs(Lex::TokenKind::In)) {
     end_token = context.Consume();
   } else if (context.PositionIs(Lex::TokenKind::Colon)) {
     CARBON_DIAGNOSTIC(ExpectedInNotColon, Error,
-                      "`:` should be replaced by `in`.");
+                      "`:` should be replaced by `in`");
     context.emitter().Emit(*context.position(), ExpectedInNotColon);
     state.has_error = true;
     end_token = context.Consume();
   } else {
     CARBON_DIAGNOSTIC(ExpectedIn, Error,
-                      "Expected `in` after loop `var` declaration.");
+                      "expected `in` after loop `var` declaration");
     context.emitter().Emit(*context.position(), ExpectedIn);
     state.has_error = true;
   }
 
-  context.AddNode(NodeKind::ForIn, end_token, state.subtree_start,
-                  state.has_error);
+  context.AddNode(NodeKind::ForIn, end_token, state.has_error);
 }
 
 }  // namespace Carbon::Parse
